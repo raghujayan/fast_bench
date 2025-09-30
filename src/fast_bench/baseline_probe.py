@@ -142,67 +142,56 @@ class BaselineProbe:
         self.results['machine'] = specs
         return specs
 
-    def ping_host(self, host: str, count: int = 10) -> Dict[str, Any]:
+    def ping_host(self, host: str, count: int = 10, port: int = 443) -> Dict[str, Any]:
         """
-        Ping a host and collect RTT statistics.
+        Test RTT to a host using TCP connections (works with Azure which blocks ICMP).
 
         Args:
-            host: Hostname or IP to ping
-            count: Number of ping packets
+            host: Hostname or IP to test
+            count: Number of connection attempts
+            port: Port to connect to (default 443 for HTTPS)
 
         Returns:
             Dictionary with min/avg/max/p95 RTT in milliseconds
         """
-        print(f"\n  Pinging {host} ({count} packets)...")
+        print(f"\n  Testing RTT to {host}:{port} ({count} connections)...")
 
-        if sys.platform == "win32":
-            cmd = ['ping', '-n', str(count), host]
-        else:
-            cmd = ['ping', '-c', str(count), host]
+        import socket
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        rtts = []
+        for i in range(count):
+            try:
+                start = time.time()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(5)
+                sock.connect((host, port))
+                elapsed = (time.time() - start) * 1000  # Convert to ms
+                sock.close()
+                rtts.append(elapsed)
+            except Exception as e:
+                # Skip failed connections
+                pass
 
-            if result.returncode != 0:
-                print(f"    ❌ Ping failed")
-                return {'host': host, 'success': False}
+        if not rtts:
+            print(f"    ❌ All connections failed")
+            return {'host': host, 'success': False}
 
-            # Parse RTT from output
-            rtts = []
-            for line in result.stdout.split('\n'):
-                if 'time=' in line.lower() or 'time<' in line.lower():
-                    # Extract time value (handles both "time=10ms" and "time<1ms")
-                    try:
-                        time_part = line.split('time')[-1]
-                        time_val = ''.join(c for c in time_part if c.isdigit() or c == '.')
-                        if time_val:
-                            rtts.append(float(time_val))
-                    except:
-                        pass
+        rtts.sort()
+        p95_idx = int(len(rtts) * 0.95)
 
-            if not rtts:
-                print(f"    ⚠️  Could not parse RTT values")
-                return {'host': host, 'success': False}
+        stats = {
+            'host': host,
+            'port': port,
+            'success': True,
+            'count': len(rtts),
+            'min_ms': min(rtts),
+            'avg_ms': sum(rtts) / len(rtts),
+            'max_ms': max(rtts),
+            'p95_ms': rtts[p95_idx] if p95_idx < len(rtts) else max(rtts)
+        }
 
-            rtts.sort()
-            p95_idx = int(len(rtts) * 0.95)
-
-            stats = {
-                'host': host,
-                'success': True,
-                'count': len(rtts),
-                'min_ms': min(rtts),
-                'avg_ms': sum(rtts) / len(rtts),
-                'max_ms': max(rtts),
-                'p95_ms': rtts[p95_idx] if p95_idx < len(rtts) else max(rtts)
-            }
-
-            print(f"    ✓ RTT: min={stats['min_ms']:.1f}ms avg={stats['avg_ms']:.1f}ms p95={stats['p95_ms']:.1f}ms")
-            return stats
-
-        except Exception as e:
-            print(f"    ❌ Ping error: {e}")
-            return {'host': host, 'success': False, 'error': str(e)}
+        print(f"    ✓ RTT: min={stats['min_ms']:.1f}ms avg={stats['avg_ms']:.1f}ms p95={stats['p95_ms']:.1f}ms")
+        return stats
 
     def test_nas_throughput(self, test_file: Path, chunk_size_mb: int = 8, duration_sec: int = 10) -> Dict[str, Any]:
         """
@@ -401,7 +390,7 @@ class BaselineProbe:
             return (len(response.content), elapsed)
         return (0, elapsed)
 
-    def test_azure_throughput_parallel(self, sas_urls: List[str], duration_sec: int = 10,
+    def test_azure_throughput_parallel(self, sas_urls: List[str], duration_sec: int = 15,
                                        chunk_size_mb: int = 8, workers: int = 8) -> Dict[str, Any]:
         """
         Test Azure Blob throughput using parallel ranged GETs.
@@ -409,7 +398,7 @@ class BaselineProbe:
 
         Args:
             sas_urls: List of SAS URLs to test
-            duration_sec: Duration to test
+            duration_sec: Duration to test (default 15s for better saturation)
             chunk_size_mb: Chunk size in MB
             workers: Number of parallel download threads
 
@@ -432,6 +421,7 @@ class BaselineProbe:
         net_io_start = psutil.net_io_counters()
 
         try:
+            last_print = start_time
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {}
 
@@ -455,6 +445,14 @@ class BaselineProbe:
                             print(f"    ⚠️  Download error: {e}")
                         finally:
                             del futures[future]
+
+                    # Progress indicator every 3 seconds
+                    now = time.time()
+                    if now - last_print >= 3:
+                        elapsed = now - start_time
+                        interim_throughput = (bytes_read / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                        print(f"    ... {elapsed:.0f}s: {interim_throughput:.1f} MB/s ({len(chunk_times)} chunks)")
+                        last_print = now
 
                     # Small sleep to avoid busy loop
                     time.sleep(0.01)
@@ -523,7 +521,7 @@ class BaselineProbe:
         Returns:
             Dictionary with bandwidth statistics
         """
-        print(f"\n  Testing iperf3 bandwidth to {server_host}")
+        print(f"    Testing iperf3 bandwidth to {server_host}")
 
         # Check if iperf3 is available
         try:
@@ -543,8 +541,13 @@ class BaselineProbe:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_sec + 10)
 
             if result.returncode != 0:
-                print(f"    ❌ iperf3 failed: {result.stderr}")
-                return {'success': False, 'error': result.stderr}
+                stderr = result.stderr.strip()
+                # Common error when no server available
+                if 'unable to connect' in stderr.lower() or 'connection refused' in stderr.lower():
+                    print(f"    ⚠️  No iperf3 server available at {server_host}, skipping")
+                else:
+                    print(f"    ⚠️  iperf3 failed, skipping")
+                return {'success': False, 'error': 'No iperf3 server available'}
 
             # Parse JSON output
             output = json.loads(result.stdout)
@@ -584,13 +587,13 @@ class BaselineProbe:
             return stats
 
         except subprocess.TimeoutExpired:
-            print(f"    ❌ iperf3 timeout")
+            print(f"    ⚠️  iperf3 timeout, skipping")
             return {'success': False, 'error': 'timeout'}
         except json.JSONDecodeError as e:
-            print(f"    ❌ Failed to parse iperf3 output: {e}")
+            print(f"    ⚠️  Failed to parse iperf3 output, skipping")
             return {'success': False, 'error': f'JSON parse error: {e}'}
         except Exception as e:
-            print(f"    ❌ Error: {e}")
+            print(f"    ⚠️  iperf3 error, skipping")
             return {'success': False, 'error': str(e)}
 
     def run(self) -> Dict[str, Any]:
@@ -673,9 +676,12 @@ class BaselineProbe:
             capacity_results['azure_parallel'] = {'success': False, 'error': 'No SAS URLs'}
 
         # iperf3 test (if available and configured)
-        # Try first Azure ping host as iperf3 target
+        # Note: Requires iperf3 server - typically not available for Azure Blob Storage endpoints
+        # This test is optional and will skip gracefully if no server is available
         if self.config.benchmark.azure_ping_hosts:
             iperf_host = self.config.benchmark.azure_ping_hosts[0]
+            print(f"\n  Note: iperf3 test requires an iperf3 server at {iperf_host}")
+            print(f"  This is optional and will skip if unavailable.")
             capacity_results['iperf3'] = self.test_iperf3_bandwidth(iperf_host)
         else:
             capacity_results['iperf3'] = {'success': False, 'error': 'No Azure host configured'}
