@@ -61,14 +61,17 @@ def attach_petrel(
     start_time = time.time()
     petrel_process = None
 
-    # Try to find existing Petrel window
+    # Try to find existing Petrel window (main window, not File Explorer)
     try:
+        # Find main Petrel window, excluding "File Explorer" windows
         app = Application(backend="uia").connect(title_re=".*Petrel.*", timeout=5)
-        petrel_window = app.window(title_re=".*Petrel.*")
-        if petrel_window.exists():
-            print(f"✓ Attached to existing Petrel window")
-            return petrel_window
-    except Exception:
+        # Look for the main Petrel window (has project name in brackets or "Platform")
+        for window in app.windows():
+            title = window.window_text()
+            if "Petrel" in title and "File Explorer" not in title:
+                print(f"✓ Attached to existing Petrel window: {title}")
+                return window
+    except Exception as e:
         pass  # Not running, will launch if requested
 
     # Launch Petrel if not found and launch_if_not_found is True
@@ -84,11 +87,13 @@ def attach_petrel(
     while time.time() - start_time < timeout:
         try:
             app = Application(backend="uia").connect(title_re=".*Petrel.*", timeout=2)
-            petrel_window = app.window(title_re=".*Petrel.*")
-            if petrel_window.exists():
-                elapsed = time.time() - start_time
-                print(f"✓ Petrel window found after {elapsed:.1f}s")
-                return petrel_window
+            # Look for the main Petrel window (exclude File Explorer)
+            for window in app.windows():
+                title = window.window_text()
+                if "Petrel" in title and "File Explorer" not in title:
+                    elapsed = time.time() - start_time
+                    print(f"✓ Petrel window found after {elapsed:.1f}s: {title}")
+                    return window
         except Exception:
             pass  # Keep waiting
 
