@@ -43,8 +43,9 @@ class AzureBlobConfig(BaseModel):
     account: str = Field(..., description="Azure storage account name")
     container: str = Field(..., description="Azure Blob container name")
     example_vds_prefix: Optional[str] = Field(None, description="Example VDS prefix URL")
-    sas_download_urls: List[str] = Field(default_factory=list, description="SAS URLs for download probes")
+    sas_download_urls: List[str] = Field(default_factory=list, description="SAS URLs for download probes (file-level, read-only)")
     sas_upload_urls: List[str] = Field(default_factory=list, description="SAS URLs for upload probes")
+    azcopy_benchmark_url: Optional[str] = Field(None, description="Container-level SAS URL for azcopy benchmark (needs write permissions)")
 
     @field_validator('sas_download_urls', 'sas_upload_urls')
     @classmethod
@@ -55,6 +56,17 @@ class AzureBlobConfig(BaseModel):
                 raise ValueError(f"SAS URL must start with https://: {url}")
             if 'blob.core.windows.net' not in url:
                 raise ValueError(f"Invalid Azure Blob URL: {url}")
+        return v
+
+    @field_validator('azcopy_benchmark_url')
+    @classmethod
+    def validate_azcopy_url(cls, v: Optional[str]) -> Optional[str]:
+        """Validate azcopy benchmark URL."""
+        if v is not None:
+            if not v.startswith('https://'):
+                raise ValueError(f"SAS URL must start with https://: {v}")
+            if 'blob.core.windows.net' not in v:
+                raise ValueError(f"Invalid Azure Blob URL: {v}")
         return v
 
 

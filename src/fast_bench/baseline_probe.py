@@ -719,28 +719,18 @@ class BaselineProbe:
         else:
             capacity_results['azure_parallel'] = {'success': False, 'error': 'No SAS URLs'}
 
-        # azcopy benchmark test (if SAS URL available)
+        # azcopy benchmark test (if configured)
         # azcopy bench mode measures maximum Azure throughput with optimized parallelism
-        if self.config.data_sources.azure_blob.sas_download_urls:
-            # Use first SAS URL for benchmark
-            # Note: azcopy bench needs a container URL, not a file URL
-            sas_url = self.config.data_sources.azure_blob.sas_download_urls[0]
-
-            # Extract container URL from file URL if needed
-            # Convert https://account.blob.core.windows.net/container/file.vds?sas
-            # To https://account.blob.core.windows.net/container?sas
-            if '/' in sas_url.split('?')[0].split('/')[-1] and '.' in sas_url.split('?')[0].split('/')[-1]:
-                # Has filename, extract container URL
-                parts = sas_url.split('?')
-                base_url = '/'.join(parts[0].split('/')[:-1])  # Remove filename
-                container_url = f"{base_url}?{parts[1]}" if len(parts) > 1 else base_url
-            else:
-                container_url = sas_url
-
+        # Requires container-level SAS URL with write permissions
+        if self.config.data_sources.azure_blob.azcopy_benchmark_url:
             print(f"\n  Note: azcopy benchmark uploads/downloads test data to measure max throughput")
-            capacity_results['azcopy_bench'] = self.test_azcopy_benchmark(container_url)
+            capacity_results['azcopy_bench'] = self.test_azcopy_benchmark(
+                self.config.data_sources.azure_blob.azcopy_benchmark_url
+            )
         else:
-            capacity_results['azcopy_bench'] = {'success': False, 'error': 'No SAS URLs configured'}
+            print(f"\n  ⚠️  azcopy benchmark skipped (no container-level SAS URL configured)")
+            print(f"  Hint: Add 'azcopy_benchmark_url' in config with write permissions")
+            capacity_results['azcopy_bench'] = {'success': False, 'error': 'No azcopy benchmark URL configured'}
 
         self.results['capacity'] = capacity_results
 
