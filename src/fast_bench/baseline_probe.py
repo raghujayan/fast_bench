@@ -215,6 +215,9 @@ class BaselineProbe:
         start_time = time.time()
         chunk_times = []
 
+        # Get initial network stats for bandwidth calculation
+        net_io_start = psutil.net_io_counters()
+
         try:
             with open(test_file, 'rb') as f:
                 while time.time() - start_time < duration_sec:
@@ -233,6 +236,12 @@ class BaselineProbe:
             elapsed = time.time() - start_time
             throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
 
+            # Calculate actual network bandwidth used
+            net_io_end = psutil.net_io_counters()
+            net_bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
+            net_bandwidth_mbs = (net_bytes_recv / (1024 * 1024)) / elapsed
+            net_bandwidth_mbps = net_bandwidth_mbs * 8
+
             chunk_times.sort()
             p95_idx = int(len(chunk_times) * 0.95)
             p99_idx = int(len(chunk_times) * 0.99)
@@ -242,12 +251,14 @@ class BaselineProbe:
                 'duration_sec': elapsed,
                 'bytes_read': bytes_read,
                 'throughput_mbs': throughput_mbs,
+                'network_bandwidth_mbs': net_bandwidth_mbs,
+                'network_bandwidth_mbps': net_bandwidth_mbps,
                 'chunk_count': len(chunk_times),
                 'chunk_time_p95_ms': chunk_times[p95_idx] * 1000 if p95_idx < len(chunk_times) else 0,
                 'chunk_time_p99_ms': chunk_times[p99_idx] * 1000 if p99_idx < len(chunk_times) else 0,
             }
 
-            print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s")
+            print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
             print(f"    ✓ Chunk times: p95={stats['chunk_time_p95_ms']:.1f}ms p99={stats['chunk_time_p99_ms']:.1f}ms")
             return stats
 
@@ -279,6 +290,9 @@ class BaselineProbe:
         chunk_times = []
         url_idx = 0
 
+        # Get initial network stats for bandwidth calculation
+        net_io_start = psutil.net_io_counters()
+
         try:
             while time.time() - start_time < duration_sec:
                 url = sas_urls[url_idx % len(sas_urls)]
@@ -303,6 +317,12 @@ class BaselineProbe:
             elapsed = time.time() - start_time
             throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
 
+            # Calculate actual network bandwidth used
+            net_io_end = psutil.net_io_counters()
+            net_bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
+            net_bandwidth_mbs = (net_bytes_recv / (1024 * 1024)) / elapsed
+            net_bandwidth_mbps = net_bandwidth_mbs * 8
+
             chunk_times.sort()
             p95_idx = int(len(chunk_times) * 0.95)
             p99_idx = int(len(chunk_times) * 0.99)
@@ -312,12 +332,14 @@ class BaselineProbe:
                 'duration_sec': elapsed,
                 'bytes_read': bytes_read,
                 'throughput_mbs': throughput_mbs,
+                'network_bandwidth_mbs': net_bandwidth_mbs,
+                'network_bandwidth_mbps': net_bandwidth_mbps,
                 'chunk_count': len(chunk_times),
                 'chunk_time_p95_ms': chunk_times[p95_idx] * 1000 if p95_idx < len(chunk_times) else 0,
                 'chunk_time_p99_ms': chunk_times[p99_idx] * 1000 if p99_idx < len(chunk_times) else 0,
             }
 
-            print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s")
+            print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
             print(f"    ✓ Chunk times: p95={stats['chunk_time_p95_ms']:.1f}ms p99={stats['chunk_time_p99_ms']:.1f}ms")
             return stats
 
