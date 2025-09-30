@@ -546,7 +546,7 @@ class BaselineProbe:
             sas_url,
             '--mode', 'download',
             '--size-per-file', f'{file_size_mb}M',
-            '--num-of-files', str(num_files),
+            '--file-count', str(num_files),
             '--delete-test-data'  # Clean up after test
         ]
 
