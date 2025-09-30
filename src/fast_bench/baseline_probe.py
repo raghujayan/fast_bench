@@ -174,7 +174,11 @@ class BaselineProbe:
         chunk_times = []
 
         # Get initial network stats for bandwidth calculation
-        net_io_start = psutil.net_io_counters()
+        try:
+            net_io_start = psutil.net_io_counters()
+        except Exception as e:
+            print(f"    ⚠️  Cannot get network stats: {e}")
+            net_io_start = None
 
         try:
             # Convert Path to string and normalize for Windows
@@ -185,6 +189,7 @@ class BaselineProbe:
             else:
                 file_path_str = str(test_file)
 
+            print(f"    Opening file: {file_path_str}")
             with open(file_path_str, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
@@ -202,11 +207,22 @@ class BaselineProbe:
             elapsed = time.time() - start_time
             throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
 
-            # Calculate actual network bandwidth used
-            net_io_end = psutil.net_io_counters()
-            net_bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
-            net_bandwidth_mbs = (net_bytes_recv / (1024 * 1024)) / elapsed
-            net_bandwidth_mbps = net_bandwidth_mbs * 8
+            # Calculate actual network bandwidth used (if we got initial stats)
+            if net_io_start:
+                try:
+                    net_io_end = psutil.net_io_counters()
+                    net_bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
+                    net_bandwidth_mbs = (net_bytes_recv / (1024 * 1024)) / elapsed
+                    net_bandwidth_mbps = net_bandwidth_mbs * 8
+                except Exception as e:
+                    print(f"    ⚠️  Cannot calculate network bandwidth: {e}")
+                    # Fallback: estimate from throughput
+                    net_bandwidth_mbs = throughput_mbs
+                    net_bandwidth_mbps = throughput_mbs * 8
+            else:
+                # Fallback if we couldn't get initial stats
+                net_bandwidth_mbs = throughput_mbs
+                net_bandwidth_mbps = throughput_mbs * 8
 
             chunk_times.sort()
             p95_idx = int(len(chunk_times) * 0.95)
@@ -567,8 +583,12 @@ class BaselineProbe:
         try:
             print(f"    Running: azcopy bench (download {num_files} x {file_size_mb}MB files)")
             print(f"    Using: {azcopy_path}")
+            print(f"    This may take 2-3 minutes...")
             start_time = time.time()
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(60, duration_sec * 3))
+            # Increase timeout significantly: azcopy bench can take a while
+            # 30 files x 64MB = 1.9GB at 200 MB/s = ~10 seconds + overhead
+            # Set timeout to 3 minutes to be safe
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             elapsed = time.time() - start_time
 
             # Get final network stats
