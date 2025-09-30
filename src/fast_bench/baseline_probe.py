@@ -142,57 +142,6 @@ class BaselineProbe:
         self.results['machine'] = specs
         return specs
 
-    def ping_host(self, host: str, count: int = 10, port: int = 443) -> Dict[str, Any]:
-        """
-        Test RTT to a host using TCP connections (works with Azure which blocks ICMP).
-
-        Args:
-            host: Hostname or IP to test
-            count: Number of connection attempts
-            port: Port to connect to (default 443 for HTTPS)
-
-        Returns:
-            Dictionary with min/avg/max/p95 RTT in milliseconds
-        """
-        print(f"\n  Testing RTT to {host}:{port} ({count} connections)...")
-
-        import socket
-
-        rtts = []
-        for i in range(count):
-            try:
-                start = time.time()
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(5)
-                sock.connect((host, port))
-                elapsed = (time.time() - start) * 1000  # Convert to ms
-                sock.close()
-                rtts.append(elapsed)
-            except Exception as e:
-                # Skip failed connections
-                pass
-
-        if not rtts:
-            print(f"    ❌ All connections failed")
-            return {'host': host, 'success': False}
-
-        rtts.sort()
-        p95_idx = int(len(rtts) * 0.95)
-
-        stats = {
-            'host': host,
-            'port': port,
-            'success': True,
-            'count': len(rtts),
-            'min_ms': min(rtts),
-            'avg_ms': sum(rtts) / len(rtts),
-            'max_ms': max(rtts),
-            'p95_ms': rtts[p95_idx] if p95_idx < len(rtts) else max(rtts)
-        }
-
-        print(f"    ✓ RTT: min={stats['min_ms']:.1f}ms avg={stats['avg_ms']:.1f}ms p95={stats['p95_ms']:.1f}ms")
-        return stats
-
     def test_nas_throughput(self, test_file: Path, chunk_size_mb: int = 8, duration_sec: int = 10) -> Dict[str, Any]:
         """
         Test NAS read throughput.
@@ -719,9 +668,6 @@ class BaselineProbe:
 
         nas_results = {}
 
-        # NAS ping
-        nas_results['ping'] = self.ping_host(self.config.benchmark.nas_ping_host)
-
         # NAS throughput (if test file exists)
         nas_test_path = Path(self.config.benchmark.nas_test_dir)
         if nas_test_path.exists():
@@ -744,10 +690,6 @@ class BaselineProbe:
         print("=" * 60)
 
         azure_results = {}
-
-        # Azure ping
-        for host in self.config.benchmark.azure_ping_hosts:
-            azure_results[f'ping_{host}'] = self.ping_host(host)
 
         # Azure throughput - single-threaded
         if self.config.data_sources.azure_blob.sas_download_urls:
@@ -844,21 +786,15 @@ class BaselineProbe:
             nas = self.results['nas']
             f.write("NAS PERFORMANCE\n")
             f.write("-" * 60 + "\n")
-            if nas.get('ping', {}).get('success'):
-                ping = nas['ping']
-                f.write(f"Ping: {ping['avg_ms']:.1f}ms avg, {ping['p95_ms']:.1f}ms p95\n")
             if nas.get('throughput', {}).get('success'):
                 tp = nas['throughput']
-                f.write(f"Throughput: {tp['throughput_mbs']:.1f} MB/s\n")
+                f.write(f"Throughput: {tp['throughput_mbs']:.1f} MB/s ({tp['network_bandwidth_mbps']:.0f} Mbps, {tp['link_utilization_pct']:.0f}% link util)\n")
             f.write("\n")
 
             # Azure results
             azure = self.results['azure']
             f.write("AZURE BLOB PERFORMANCE\n")
             f.write("-" * 60 + "\n")
-            for key, value in azure.items():
-                if key.startswith('ping_') and value.get('success'):
-                    f.write(f"Ping {value['host']}: {value['avg_ms']:.1f}ms avg, {value['p95_ms']:.1f}ms p95\n")
             if azure.get('throughput_single', {}).get('success'):
                 tp = azure['throughput_single']
                 f.write(f"Throughput (single-threaded): {tp['throughput_mbs']:.1f} MB/s ({tp['network_bandwidth_mbps']:.0f} Mbps, {tp['link_utilization_pct']:.0f}% link util)\n")

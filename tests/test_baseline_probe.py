@@ -63,43 +63,6 @@ def test_collect_machine_specs(mock_config):
     assert specs['gpu_count'] >= 0
 
 
-def test_ping_host_success(mock_config, mocker):
-    """Test successful TCP RTT measurement."""
-    # Mock successful socket connections
-    mock_socket = mocker.Mock()
-    mock_socket.connect = mocker.Mock()
-    mock_socket.close = mocker.Mock()
-    mocker.patch('socket.socket', return_value=mock_socket)
-
-    # Mock time.time() to simulate consistent RTT
-    times = [0.0, 0.01, 0.02, 0.03, 0.04, 0.05]  # 10ms, 10ms, 10ms RTTs
-    mocker.patch('time.time', side_effect=times)
-
-    probe = BaselineProbe(mock_config)
-    result = probe.ping_host("test.example.com", count=3, port=443)
-
-    assert result['success'] == True
-    assert result['host'] == "test.example.com"
-    assert result['port'] == 443
-    assert 'min_ms' in result
-    assert 'avg_ms' in result
-    assert 'p95_ms' in result
-    assert result['count'] == 3
-
-
-def test_ping_host_failure(mock_config, mocker):
-    """Test failed TCP RTT measurement."""
-    # Mock socket that always fails to connect
-    mock_socket = mocker.Mock()
-    mock_socket.connect = mocker.Mock(side_effect=Exception("Connection failed"))
-    mocker.patch('socket.socket', return_value=mock_socket)
-
-    probe = BaselineProbe(mock_config)
-    result = probe.ping_host("nonexistent.example.com", count=3, port=443)
-
-    assert result['success'] == False
-
-
 def test_nas_throughput_file_not_found(mock_config):
     """Test NAS throughput when test file doesn't exist."""
     probe = BaselineProbe(mock_config)
@@ -186,12 +149,20 @@ def test_save_results(mock_config):
             'nics': [{'name': 'eth0', 'speed_mbps': 1000}]
         },
         'nas': {
-            'ping': {'success': True, 'avg_ms': 5.0, 'p95_ms': 10.0},
-            'throughput': {'success': True, 'throughput_mbs': 100.0}
+            'throughput': {
+                'success': True,
+                'throughput_mbs': 100.0,
+                'network_bandwidth_mbps': 800.0,
+                'link_utilization_pct': 80.0
+            }
         },
         'azure': {
-            'ping_blob.core.windows.net': {'success': True, 'host': 'blob.core.windows.net', 'avg_ms': 20.0, 'p95_ms': 30.0},
-            'throughput': {'success': True, 'throughput_mbs': 200.0}
+            'throughput_single': {
+                'success': True,
+                'throughput_mbs': 200.0,
+                'network_bandwidth_mbps': 1600.0,
+                'link_utilization_pct': 40.0
+            }
         }
     }
 
