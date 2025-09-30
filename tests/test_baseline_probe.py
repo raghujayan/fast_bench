@@ -246,3 +246,89 @@ def test_baseline_probe_json_serializable(mock_config):
     json_str = json.dumps(probe.results)
     assert isinstance(json_str, str)
     assert len(json_str) > 0
+
+
+def test_azure_throughput_parallel_no_urls(mock_config):
+    """Test parallel Azure throughput when no URLs configured."""
+    probe = BaselineProbe(mock_config)
+    probe.link_speed_mbps = 1000
+
+    result = probe.test_azure_throughput_parallel([])
+
+    assert result['success'] is False
+    assert 'error' in result
+
+
+@pytest.mark.mock
+def test_azure_throughput_parallel_success(mock_config, mocker):
+    """Test parallel Azure throughput with mocked requests."""
+    probe = BaselineProbe(mock_config)
+    probe.link_speed_mbps = 1000
+
+    # Mock successful HTTP responses
+    mock_response = mocker.Mock()
+    mock_response.status_code = 206
+    mock_response.content = b'x' * (8 * 1024 * 1024)  # 8MB
+    mocker.patch('requests.get', return_value=mock_response)
+
+    # Mock network counters
+    mock_net_start = mocker.Mock(bytes_recv=0)
+    mock_net_end = mocker.Mock(bytes_recv=80 * 1024 * 1024)  # 80MB received
+    mocker.patch('psutil.net_io_counters', side_effect=[mock_net_start, mock_net_end])
+
+    sas_urls = ['https://example.blob.core.windows.net/test.vds?sas=token']
+    result = probe.test_azure_throughput_parallel(sas_urls, duration_sec=1, workers=4)
+
+    assert result['success'] is True
+    assert result['throughput_mbs'] > 0
+    assert result['network_bandwidth_mbps'] > 0
+    assert result['link_utilization_pct'] >= 0
+    assert result['workers'] == 4
+    assert result['chunk_count'] > 0
+
+
+def test_iperf3_not_installed(mock_config, mocker):
+    """Test iperf3 bandwidth when iperf3 is not installed."""
+    probe = BaselineProbe(mock_config)
+    probe.link_speed_mbps = 1000
+
+    # Mock iperf3 not found
+    mocker.patch('subprocess.run', side_effect=FileNotFoundError())
+
+    result = probe.test_iperf3_bandwidth('example.com')
+
+    assert result['success'] is False
+    assert 'not installed' in result['error']
+
+
+@pytest.mark.mock
+def test_iperf3_success(mock_config, mocker):
+    """Test iperf3 bandwidth with mocked subprocess."""
+    probe = BaselineProbe(mock_config)
+    probe.link_speed_mbps = 1000
+
+    # Mock iperf3 version check
+    mock_version = mocker.Mock(returncode=0)
+
+    # Mock iperf3 JSON output
+    iperf_output = {
+        'end': {
+            'sum_sent': {
+                'bits_per_second': 500000000,  # 500 Mbps
+                'bytes': 62500000,  # 62.5 MB
+                'retransmits': 5
+            }
+        }
+    }
+    mock_iperf = mocker.Mock(returncode=0, stdout=json.dumps(iperf_output))
+
+    mocker.patch('subprocess.run', side_effect=[mock_version, mock_iperf])
+
+    result = probe.test_iperf3_bandwidth('example.com', duration_sec=10)
+
+    assert result['success'] is True
+    assert result['bandwidth_mbps'] == 500.0
+    assert result['bandwidth_mbs'] == 62.5
+    assert result['link_utilization_pct'] == 50.0  # 500 Mbps / 1000 Mbps
+    assert result['retransmits'] == 5
+    assert result['server_host'] == 'example.com'

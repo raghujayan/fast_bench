@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import psutil
 import requests
@@ -288,7 +289,7 @@ class BaselineProbe:
 
     def test_azure_throughput(self, sas_urls: List[str], duration_sec: int = 10, chunk_size_mb: int = 8) -> Dict[str, Any]:
         """
-        Test Azure Blob throughput using ranged GETs.
+        Test Azure Blob throughput using single-threaded ranged GETs.
 
         Args:
             sas_urls: List of SAS URLs to test
@@ -298,7 +299,7 @@ class BaselineProbe:
         Returns:
             Dictionary with throughput statistics
         """
-        print(f"\n  Testing Azure Blob throughput ({len(sas_urls)} URLs)")
+        print(f"\n  Testing Azure Blob throughput - single-threaded ({len(sas_urls)} URLs)")
 
         if not sas_urls:
             print(f"    ⚠️  No SAS URLs configured, skipping")
@@ -376,6 +377,222 @@ class BaselineProbe:
             print(f"    ❌ Error: {e}")
             return {'success': False, 'error': str(e)}
 
+    def _download_chunk_worker(self, url: str, chunk_idx: int, chunk_size: int) -> tuple[int, float]:
+        """
+        Worker function for parallel Azure downloads.
+
+        Args:
+            url: SAS URL to download from
+            chunk_idx: Chunk index
+            chunk_size: Size of chunk in bytes
+
+        Returns:
+            Tuple of (bytes_downloaded, elapsed_time)
+        """
+        range_start = (chunk_idx * chunk_size) % (100 * 1024 * 1024)
+        range_end = range_start + chunk_size - 1
+        headers = {'Range': f'bytes={range_start}-{range_end}'}
+
+        start = time.time()
+        response = requests.get(url, headers=headers, timeout=30)
+        elapsed = time.time() - start
+
+        if response.status_code in [200, 206]:
+            return (len(response.content), elapsed)
+        return (0, elapsed)
+
+    def test_azure_throughput_parallel(self, sas_urls: List[str], duration_sec: int = 10,
+                                       chunk_size_mb: int = 8, workers: int = 8) -> Dict[str, Any]:
+        """
+        Test Azure Blob throughput using parallel ranged GETs.
+        This simulates how FAST SDK and modern download tools work.
+
+        Args:
+            sas_urls: List of SAS URLs to test
+            duration_sec: Duration to test
+            chunk_size_mb: Chunk size in MB
+            workers: Number of parallel download threads
+
+        Returns:
+            Dictionary with throughput statistics
+        """
+        print(f"\n  Testing Azure Blob throughput - multi-threaded ({workers} parallel connections)")
+
+        if not sas_urls:
+            print(f"    ⚠️  No SAS URLs configured, skipping")
+            return {'success': False, 'error': 'No SAS URLs'}
+
+        chunk_size = chunk_size_mb * 1024 * 1024
+        bytes_read = 0
+        start_time = time.time()
+        chunk_times = []
+        chunk_idx = 0
+
+        # Get initial network stats for bandwidth calculation
+        net_io_start = psutil.net_io_counters()
+
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {}
+
+                # Keep submitting work until duration expires
+                while time.time() - start_time < duration_sec:
+                    # Submit new work if we have capacity
+                    while len(futures) < workers and time.time() - start_time < duration_sec:
+                        url = sas_urls[chunk_idx % len(sas_urls)]
+                        future = executor.submit(self._download_chunk_worker, url, chunk_idx, chunk_size)
+                        futures[future] = time.time()
+                        chunk_idx += 1
+
+                    # Check for completed futures
+                    done_futures = [f for f in futures if f.done()]
+                    for future in done_futures:
+                        try:
+                            chunk_bytes, chunk_time = future.result()
+                            bytes_read += chunk_bytes
+                            chunk_times.append(chunk_time)
+                        except Exception as e:
+                            print(f"    ⚠️  Download error: {e}")
+                        finally:
+                            del futures[future]
+
+                    # Small sleep to avoid busy loop
+                    time.sleep(0.01)
+
+                # Wait for remaining futures
+                for future in as_completed(futures.keys(), timeout=5):
+                    try:
+                        chunk_bytes, chunk_time = future.result()
+                        bytes_read += chunk_bytes
+                        chunk_times.append(chunk_time)
+                    except Exception as e:
+                        print(f"    ⚠️  Download error: {e}")
+
+            elapsed = time.time() - start_time
+            throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
+
+            # Calculate actual network bandwidth used
+            net_io_end = psutil.net_io_counters()
+            net_bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
+            net_bandwidth_mbs = (net_bytes_recv / (1024 * 1024)) / elapsed
+            net_bandwidth_mbps = net_bandwidth_mbs * 8
+
+            chunk_times.sort()
+            p95_idx = int(len(chunk_times) * 0.95) if chunk_times else 0
+            p99_idx = int(len(chunk_times) * 0.99) if chunk_times else 0
+
+            # Calculate link utilization if we know link speed
+            link_utilization_pct = 0
+            if self.link_speed_mbps and self.link_speed_mbps > 0:
+                link_utilization_pct = (net_bandwidth_mbps / self.link_speed_mbps) * 100
+
+            stats = {
+                'success': True,
+                'duration_sec': elapsed,
+                'bytes_read': bytes_read,
+                'throughput_mbs': throughput_mbs,
+                'network_bandwidth_mbs': net_bandwidth_mbs,
+                'network_bandwidth_mbps': net_bandwidth_mbps,
+                'link_utilization_pct': link_utilization_pct,
+                'workers': workers,
+                'chunk_count': len(chunk_times),
+                'chunk_time_p95_ms': chunk_times[p95_idx] * 1000 if p95_idx < len(chunk_times) else 0,
+                'chunk_time_p99_ms': chunk_times[p99_idx] * 1000 if p99_idx < len(chunk_times) else 0,
+            }
+
+            if link_utilization_pct > 0:
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps, {link_utilization_pct:.0f}% link utilization)")
+            else:
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
+            print(f"    ✓ Chunk times: p95={stats['chunk_time_p95_ms']:.1f}ms p99={stats['chunk_time_p99_ms']:.1f}ms")
+            return stats
+
+        except Exception as e:
+            print(f"    ❌ Error: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def test_iperf3_bandwidth(self, server_host: str, duration_sec: int = 10) -> Dict[str, Any]:
+        """
+        Test network bandwidth using iperf3.
+        Requires iperf3 to be installed on the system and an iperf3 server running on the target host.
+
+        Args:
+            server_host: iperf3 server hostname/IP
+            duration_sec: Duration to test
+
+        Returns:
+            Dictionary with bandwidth statistics
+        """
+        print(f"\n  Testing iperf3 bandwidth to {server_host}")
+
+        # Check if iperf3 is available
+        try:
+            result = subprocess.run(['iperf3', '--version'], capture_output=True, timeout=5)
+            if result.returncode != 0:
+                print(f"    ⚠️  iperf3 not found, skipping")
+                return {'success': False, 'error': 'iperf3 not installed'}
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            print(f"    ⚠️  iperf3 not found, skipping")
+            return {'success': False, 'error': 'iperf3 not installed'}
+
+        # Run iperf3 client
+        cmd = ['iperf3', '-c', server_host, '-t', str(duration_sec), '-J']  # -J for JSON output
+
+        try:
+            print(f"    Running: iperf3 -c {server_host} -t {duration_sec}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_sec + 10)
+
+            if result.returncode != 0:
+                print(f"    ❌ iperf3 failed: {result.stderr}")
+                return {'success': False, 'error': result.stderr}
+
+            # Parse JSON output
+            output = json.loads(result.stdout)
+
+            # Extract bandwidth statistics
+            end_stats = output.get('end', {})
+            sum_sent = end_stats.get('sum_sent', {})
+
+            bits_per_sec = sum_sent.get('bits_per_second', 0)
+            bandwidth_mbps = bits_per_sec / (1000 * 1000)  # Convert to Mbps
+            bandwidth_mbs = bandwidth_mbps / 8  # Convert to MB/s
+
+            # Calculate link utilization
+            link_utilization_pct = 0
+            if self.link_speed_mbps and self.link_speed_mbps > 0:
+                link_utilization_pct = (bandwidth_mbps / self.link_speed_mbps) * 100
+
+            stats = {
+                'success': True,
+                'server_host': server_host,
+                'duration_sec': duration_sec,
+                'bandwidth_mbps': bandwidth_mbps,
+                'bandwidth_mbs': bandwidth_mbs,
+                'link_utilization_pct': link_utilization_pct,
+                'bytes_sent': sum_sent.get('bytes', 0),
+                'retransmits': sum_sent.get('retransmits', 0),
+            }
+
+            if link_utilization_pct > 0:
+                print(f"    ✓ Bandwidth: {bandwidth_mbs:.1f} MB/s ({bandwidth_mbps:.0f} Mbps, {link_utilization_pct:.0f}% link utilization)")
+            else:
+                print(f"    ✓ Bandwidth: {bandwidth_mbs:.1f} MB/s ({bandwidth_mbps:.0f} Mbps)")
+
+            if stats['retransmits'] > 0:
+                print(f"    ⚠️  Retransmits: {stats['retransmits']}")
+
+            return stats
+
+        except subprocess.TimeoutExpired:
+            print(f"    ❌ iperf3 timeout")
+            return {'success': False, 'error': 'timeout'}
+        except json.JSONDecodeError as e:
+            print(f"    ❌ Failed to parse iperf3 output: {e}")
+            return {'success': False, 'error': f'JSON parse error: {e}'}
+        except Exception as e:
+            print(f"    ❌ Error: {e}")
+            return {'success': False, 'error': str(e)}
+
     def run(self) -> Dict[str, Any]:
         """
         Run complete baseline probe.
@@ -427,16 +644,43 @@ class BaselineProbe:
         for host in self.config.benchmark.azure_ping_hosts:
             azure_results[f'ping_{host}'] = self.ping_host(host)
 
-        # Azure throughput
+        # Azure throughput - single-threaded
         if self.config.data_sources.azure_blob.sas_download_urls:
-            azure_results['throughput'] = self.test_azure_throughput(
+            azure_results['throughput_single'] = self.test_azure_throughput(
                 self.config.data_sources.azure_blob.sas_download_urls
             )
         else:
             print(f"  ⚠️  No Azure SAS URLs configured")
-            azure_results['throughput'] = {'success': False, 'error': 'No SAS URLs'}
+            azure_results['throughput_single'] = {'success': False, 'error': 'No SAS URLs'}
 
         self.results['azure'] = azure_results
+
+        # Path Capacity Tests
+        print("\n" + "=" * 60)
+        print("Path Capacity Tests (VM ↔ Azure)")
+        print("=" * 60)
+        print("These tests measure maximum achievable bandwidth on the VM-to-Azure path.")
+
+        capacity_results = {}
+
+        # Multi-threaded Azure download (simulates FAST SDK behavior)
+        if self.config.data_sources.azure_blob.sas_download_urls:
+            capacity_results['azure_parallel'] = self.test_azure_throughput_parallel(
+                self.config.data_sources.azure_blob.sas_download_urls,
+                workers=8
+            )
+        else:
+            capacity_results['azure_parallel'] = {'success': False, 'error': 'No SAS URLs'}
+
+        # iperf3 test (if available and configured)
+        # Try first Azure ping host as iperf3 target
+        if self.config.benchmark.azure_ping_hosts:
+            iperf_host = self.config.benchmark.azure_ping_hosts[0]
+            capacity_results['iperf3'] = self.test_iperf3_bandwidth(iperf_host)
+        else:
+            capacity_results['iperf3'] = {'success': False, 'error': 'No Azure host configured'}
+
+        self.results['capacity'] = capacity_results
 
         return self.results
 
@@ -495,10 +739,25 @@ class BaselineProbe:
             for key, value in azure.items():
                 if key.startswith('ping_') and value.get('success'):
                     f.write(f"Ping {value['host']}: {value['avg_ms']:.1f}ms avg, {value['p95_ms']:.1f}ms p95\n")
-            if azure.get('throughput', {}).get('success'):
-                tp = azure['throughput']
-                f.write(f"Throughput: {tp['throughput_mbs']:.1f} MB/s\n")
+            if azure.get('throughput_single', {}).get('success'):
+                tp = azure['throughput_single']
+                f.write(f"Throughput (single-threaded): {tp['throughput_mbs']:.1f} MB/s ({tp['network_bandwidth_mbps']:.0f} Mbps, {tp['link_utilization_pct']:.0f}% link util)\n")
             f.write("\n")
+
+            # Path Capacity results
+            if 'capacity' in self.results:
+                capacity = self.results['capacity']
+                f.write("PATH CAPACITY (VM ↔ AZURE)\n")
+                f.write("-" * 60 + "\n")
+                if capacity.get('azure_parallel', {}).get('success'):
+                    ap = capacity['azure_parallel']
+                    f.write(f"Azure Multi-threaded ({ap['workers']} workers): {ap['throughput_mbs']:.1f} MB/s ({ap['network_bandwidth_mbps']:.0f} Mbps, {ap['link_utilization_pct']:.0f}% link util)\n")
+                if capacity.get('iperf3', {}).get('success'):
+                    ip = capacity['iperf3']
+                    f.write(f"iperf3 to {ip['server_host']}: {ip['bandwidth_mbs']:.1f} MB/s ({ip['bandwidth_mbps']:.0f} Mbps, {ip['link_utilization_pct']:.0f}% link util)\n")
+                    if ip['retransmits'] > 0:
+                        f.write(f"  Retransmits: {ip['retransmits']}\n")
+                f.write("\n")
 
         print(f"✓ Saved: {summary_path}")
 
