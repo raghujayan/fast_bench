@@ -48,6 +48,7 @@ class BaselineProbe:
             'nas': {},
             'azure': {},
         }
+        self.link_speed_mbps = None  # Will be detected from NIC
 
     def collect_machine_specs(self) -> Dict[str, Any]:
         """
@@ -116,6 +117,7 @@ class BaselineProbe:
         # Network interfaces
         net_if = psutil.net_if_stats()
         nics = []
+        max_speed = 0
         for name, stats in net_if.items():
             if stats.isup:
                 nic_info = {
@@ -125,7 +127,16 @@ class BaselineProbe:
                 nics.append(nic_info)
                 print(f"  NIC: {name} ({stats.speed} Mbps)")
 
+                # Track maximum link speed (excluding loopback)
+                if 'loopback' not in name.lower() and stats.speed > max_speed:
+                    max_speed = stats.speed
+
         specs['nics'] = nics
+
+        # Store max link speed for utilization calculations
+        if max_speed > 0:
+            self.link_speed_mbps = max_speed
+            print(f"  Primary link speed: {self.link_speed_mbps} Mbps")
 
         self.results['machine'] = specs
         return specs
@@ -246,6 +257,11 @@ class BaselineProbe:
             p95_idx = int(len(chunk_times) * 0.95)
             p99_idx = int(len(chunk_times) * 0.99)
 
+            # Calculate link utilization if we know link speed
+            link_utilization_pct = 0
+            if self.link_speed_mbps and self.link_speed_mbps > 0:
+                link_utilization_pct = (net_bandwidth_mbps / self.link_speed_mbps) * 100
+
             stats = {
                 'success': True,
                 'duration_sec': elapsed,
@@ -253,12 +269,16 @@ class BaselineProbe:
                 'throughput_mbs': throughput_mbs,
                 'network_bandwidth_mbs': net_bandwidth_mbs,
                 'network_bandwidth_mbps': net_bandwidth_mbps,
+                'link_utilization_pct': link_utilization_pct,
                 'chunk_count': len(chunk_times),
                 'chunk_time_p95_ms': chunk_times[p95_idx] * 1000 if p95_idx < len(chunk_times) else 0,
                 'chunk_time_p99_ms': chunk_times[p99_idx] * 1000 if p99_idx < len(chunk_times) else 0,
             }
 
-            print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
+            if link_utilization_pct > 0:
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps, {link_utilization_pct:.0f}% link utilization)")
+            else:
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
             print(f"    ✓ Chunk times: p95={stats['chunk_time_p95_ms']:.1f}ms p99={stats['chunk_time_p99_ms']:.1f}ms")
             return stats
 
@@ -327,6 +347,11 @@ class BaselineProbe:
             p95_idx = int(len(chunk_times) * 0.95)
             p99_idx = int(len(chunk_times) * 0.99)
 
+            # Calculate link utilization if we know link speed
+            link_utilization_pct = 0
+            if self.link_speed_mbps and self.link_speed_mbps > 0:
+                link_utilization_pct = (net_bandwidth_mbps / self.link_speed_mbps) * 100
+
             stats = {
                 'success': True,
                 'duration_sec': elapsed,
@@ -334,12 +359,16 @@ class BaselineProbe:
                 'throughput_mbs': throughput_mbs,
                 'network_bandwidth_mbs': net_bandwidth_mbs,
                 'network_bandwidth_mbps': net_bandwidth_mbps,
+                'link_utilization_pct': link_utilization_pct,
                 'chunk_count': len(chunk_times),
                 'chunk_time_p95_ms': chunk_times[p95_idx] * 1000 if p95_idx < len(chunk_times) else 0,
                 'chunk_time_p99_ms': chunk_times[p99_idx] * 1000 if p99_idx < len(chunk_times) else 0,
             }
 
-            print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
+            if link_utilization_pct > 0:
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps, {link_utilization_pct:.0f}% link utilization)")
+            else:
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps network)")
             print(f"    ✓ Chunk times: p95={stats['chunk_time_p95_ms']:.1f}ms p99={stats['chunk_time_p99_ms']:.1f}ms")
             return stats
 
