@@ -565,11 +565,17 @@ class BaselineProbe:
 
             if result.returncode != 0:
                 stderr = result.stderr.strip()
+                stdout = result.stdout.strip()
                 if 'not found' in stderr.lower() or 'command not found' in stderr.lower():
                     print(f"    ⚠️  azcopy not available, skipping")
                 else:
                     print(f"    ⚠️  azcopy benchmark failed, skipping")
-                return {'success': False, 'error': 'azcopy benchmark failed'}
+                    # Show first few lines of error for debugging
+                    error_lines = (stderr or stdout).split('\n')[:3]
+                    for line in error_lines:
+                        if line.strip():
+                            print(f"    Error: {line.strip()}")
+                return {'success': False, 'error': 'azcopy benchmark failed', 'stderr': stderr}
 
             # Parse azcopy output for throughput
             # Look for "Final Job Status:" and throughput lines
