@@ -509,6 +509,52 @@ class BaselineProbe:
             print(f"    ❌ Error: {e}")
             return {'success': False, 'error': str(e)}
 
+    def _find_azcopy(self) -> Optional[str]:
+        """
+        Find azcopy executable, checking common installation locations.
+
+        Returns:
+            Path to azcopy executable, or None if not found
+        """
+        import shutil
+
+        # Try standard PATH first
+        azcopy_path = shutil.which('azcopy')
+        if azcopy_path:
+            return azcopy_path
+
+        # Windows-specific: check winget installation location
+        if sys.platform == "win32":
+            # Winget installs to deep paths like:
+            # C:\Users\{user}\AppData\Local\Microsoft\WinGet\Packages\Microsoft.Azure.AZCopy.10_...\azcopy_windows_amd64_10.30.0\azcopy.exe
+            winget_base = Path.home() / "AppData" / "Local" / "Microsoft" / "WinGet" / "Packages"
+
+            if winget_base.exists():
+                # Search for azcopy.exe in WinGet packages
+                for package_dir in winget_base.glob("Microsoft.Azure.AZCopy.*"):
+                    for azcopy_exe in package_dir.rglob("azcopy.exe"):
+                        # Verify it works
+                        try:
+                            result = subprocess.run([str(azcopy_exe), '--version'],
+                                                   capture_output=True, timeout=5)
+                            if result.returncode == 0:
+                                return str(azcopy_exe)
+                        except:
+                            pass
+
+            # Also check Program Files
+            program_files = [
+                Path("C:/Program Files/azcopy"),
+                Path("C:/Program Files (x86)/azcopy"),
+            ]
+            for pf in program_files:
+                if pf.exists():
+                    azcopy_exe = pf / "azcopy.exe"
+                    if azcopy_exe.exists():
+                        return str(azcopy_exe)
+
+        return None
+
     def test_azcopy_benchmark(self, sas_url: str, duration_sec: int = 10) -> Dict[str, Any]:
         """
         Test Azure Blob throughput using azcopy benchmark mode.
@@ -523,14 +569,11 @@ class BaselineProbe:
         """
         print(f"    Testing azcopy benchmark to Azure Blob")
 
-        # Check if azcopy is available
-        try:
-            result = subprocess.run(['azcopy', '--version'], capture_output=True, timeout=5)
-            if result.returncode != 0:
-                print(f"    ⚠️  azcopy not found, skipping")
-                return {'success': False, 'error': 'azcopy not installed'}
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        # Find azcopy executable
+        azcopy_path = self._find_azcopy()
+        if not azcopy_path:
             print(f"    ⚠️  azcopy not found, skipping")
+            print(f"    Hint: Install with 'winget install azcopy' or download from https://aka.ms/downloadazcopy")
             return {'success': False, 'error': 'azcopy not installed'}
 
         # azcopy bench mode: downloads random data to measure throughput
@@ -548,7 +591,7 @@ class BaselineProbe:
 
         # Run azcopy bench in download mode
         cmd = [
-            'azcopy', 'bench',
+            azcopy_path, 'bench',
             sas_url,
             '--mode', 'download',
             '--size-per-file', f'{file_size_mb}M',
@@ -558,6 +601,7 @@ class BaselineProbe:
 
         try:
             print(f"    Running: azcopy bench (download {num_files} x {file_size_mb}MB files)")
+            print(f"    Using: {azcopy_path}")
             start_time = time.time()
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(60, duration_sec * 3))
             elapsed = time.time() - start_time

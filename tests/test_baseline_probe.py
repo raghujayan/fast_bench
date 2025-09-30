@@ -309,8 +309,8 @@ def test_azcopy_success(mock_config, mocker):
     probe = BaselineProbe(mock_config)
     probe.link_speed_mbps = 1000
 
-    # Mock azcopy version check
-    mock_version = mocker.Mock(returncode=0)
+    # Mock _find_azcopy to return a path
+    mocker.patch.object(probe, '_find_azcopy', return_value='/usr/local/bin/azcopy')
 
     # Mock azcopy bench output
     azcopy_output = """
@@ -327,7 +327,7 @@ Job ... completed
     mock_net_end = mocker.Mock(bytes_recv=500 * 1024 * 1024)  # 500 MB
     mocker.patch('psutil.net_io_counters', side_effect=[mock_net_start, mock_net_end])
 
-    mocker.patch('subprocess.run', side_effect=[mock_version, mock_bench])
+    mocker.patch('subprocess.run', return_value=mock_bench)
 
     result = probe.test_azcopy_benchmark('https://example.blob.core.windows.net/container?sas=token', duration_sec=10)
 
