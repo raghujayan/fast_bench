@@ -160,6 +160,14 @@ class BaselineProbe:
             print(f"    ⚠️  Test file not found, skipping")
             return {'success': False, 'error': 'File not found'}
 
+        # Debug: Print file size to verify file is readable
+        try:
+            file_size_mb = test_file.stat().st_size / (1024 * 1024)
+            print(f"    File size: {file_size_mb:.1f} MB")
+        except Exception as e:
+            print(f"    ⚠️  Cannot stat file: {e}")
+            return {'success': False, 'error': f'Cannot access file: {e}'}
+
         chunk_size = chunk_size_mb * 1024 * 1024
         bytes_read = 0
         start_time = time.time()
@@ -169,8 +177,14 @@ class BaselineProbe:
         net_io_start = psutil.net_io_counters()
 
         try:
-            # Convert Path to string to handle Windows paths properly
-            file_path_str = str(test_file)
+            # Convert Path to string and normalize for Windows
+            # This handles paths with spaces and special characters properly
+            if sys.platform == "win32":
+                # Use raw string path for Windows
+                file_path_str = str(test_file).replace('/', '\\')
+            else:
+                file_path_str = str(test_file)
+
             with open(file_path_str, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
