@@ -180,21 +180,12 @@ class BaselineProbe:
             print(f"    ⚠️  Cannot get network stats: {e}")
             net_io_start = None
 
-        # Try opening the file with explicit binary mode and larger buffer
-        path_str = str(test_file)
-        print(f"    Opening file: {path_str}")
+        # Try opening the file - use raw string to avoid path issues
+        print(f"    Opening file: {test_file}")
 
         try:
-            # Use os.open with explicit flags for better Windows compatibility
-            import os as os_module
-            if sys.platform == "win32":
-                # Open with explicit binary and no special handling
-                fd = os_module.open(path_str, os_module.O_RDONLY | os_module.O_BINARY)
-                f = os_module.fdopen(fd, 'rb', buffering=8388608)  # 8MB buffer
-            else:
-                f = open(path_str, 'rb', buffering=8388608)
-
-            with f:
+            # Use Path.open() which handles Windows paths better
+            with test_file.open('rb', buffering=8388608) as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
@@ -587,13 +578,14 @@ class BaselineProbe:
         try:
             print(f"    Running: azcopy bench (download {num_files} x {file_size_mb}MB files)")
             print(f"    Using: {azcopy_path}")
-            print(f"    This may take 2-3 minutes...")
+            print(f"    This may take 3-5 minutes...")
+            print(f"    Command: {' '.join(cmd)}")
             start_time = time.time()
-            # Increase timeout significantly: azcopy bench can take a while
-            # 30 files x 64MB = 1.9GB at 200 MB/s = ~10 seconds + overhead
-            # Set timeout to 3 minutes to be safe
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+
+            # Run azcopy without capturing output so we can see progress in real-time
+            result = subprocess.run(cmd, text=True, timeout=300)
             elapsed = time.time() - start_time
+            print(f"    Completed in {elapsed:.1f} seconds")
 
             # Get final network stats
             net_io_end = psutil.net_io_counters()
@@ -602,61 +594,14 @@ class BaselineProbe:
             net_bandwidth_mbps = net_bandwidth_mbs * 8
 
             if result.returncode != 0:
-                stderr = result.stderr.strip()
-                stdout = result.stdout.strip()
-                if 'not found' in stderr.lower() or 'command not found' in stderr.lower():
-                    print(f"    ⚠️  azcopy not available, skipping")
-                else:
-                    print(f"    ⚠️  azcopy benchmark failed, skipping")
-                    # Show first few lines of error for debugging
-                    error_lines = (stderr or stdout).split('\n')[:3]
-                    for line in error_lines:
-                        if line.strip():
-                            print(f"    Error: {line.strip()}")
-                return {'success': False, 'error': 'azcopy benchmark failed', 'stderr': stderr}
+                print(f"    ⚠️  azcopy benchmark failed (exit code {result.returncode}), skipping")
+                return {'success': False, 'error': f'azcopy exit code {result.returncode}'}
 
-            # Parse azcopy output for throughput
-            # Look for "Final Job Status:" and throughput lines
-            output = result.stdout
-            throughput_mbs = 0
-            bytes_transferred = 0
-            files_transferred = 0
-
-            for line in output.split('\n'):
-                # azcopy shows throughput like "Throughput (MB/s): 123.45"
-                if 'throughput' in line.lower() and 'mb/s' in line.lower():
-                    try:
-                        # Extract number from line like "Throughput (MB/s): 123.45"
-                        parts = line.split(':')
-                        if len(parts) > 1:
-                            throughput_mbs = float(parts[-1].strip().split()[0])
-                    except:
-                        pass
-
-                # Extract bytes transferred
-                if 'bytes transferred' in line.lower() or 'total bytes transferred' in line.lower():
-                    try:
-                        # Look for number in format like "12345678 bytes" or "123.45 MB"
-                        import re
-                        numbers = re.findall(r'[\d.]+', line)
-                        if numbers:
-                            bytes_transferred = int(float(numbers[0]) * (1024 * 1024 if 'mb' in line.lower() else 1))
-                    except:
-                        pass
-
-                # Count successful transfers
-                if 'completed' in line.lower() or 'succeeded' in line.lower():
-                    try:
-                        import re
-                        numbers = re.findall(r'\d+', line)
-                        if numbers:
-                            files_transferred = int(numbers[0])
-                    except:
-                        pass
-
-            # If we couldn't parse azcopy output, calculate from network stats
-            if throughput_mbs == 0:
-                throughput_mbs = net_bandwidth_mbs
+            # Since we're not capturing output, calculate throughput from network stats
+            # azcopy bench output goes directly to console for user to see
+            throughput_mbs = net_bandwidth_mbs
+            bytes_transferred = net_bytes_recv
+            files_transferred = num_files  # Assume all completed if exit code 0
 
             # Calculate link utilization
             link_utilization_pct = 0
