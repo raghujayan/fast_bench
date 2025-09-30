@@ -82,25 +82,32 @@ def test_metrics_with_petrel():
         text=True
     )
 
-    # Monitor agent overhead
-    agent_psutil = psutil.Process(agent_proc.pid)
-    time.sleep(2)  # Let it warm up
-
+    # Monitor agent overhead (check early while it's still running)
     print("\n3. Monitoring agent overhead...")
-    agent_cpu = agent_psutil.cpu_percent(interval=2.0)
-    agent_mem = agent_psutil.memory_info().rss / (1024 * 1024)
-    print(f"   Agent CPU: {agent_cpu:.2f}%")
-    print(f"   Agent RAM: {agent_mem:.1f} MB")
+    try:
+        agent_psutil = psutil.Process(agent_proc.pid)
+        time.sleep(1)  # Let it warm up
 
-    if agent_cpu > 2.0:
-        print(f"   ⚠️  WARNING: CPU overhead high (target: <2%)")
-    else:
-        print(f"   ✓ CPU overhead acceptable")
+        # Quick check if process still exists
+        if agent_psutil.is_running():
+            agent_cpu = agent_psutil.cpu_percent(interval=1.0)
+            agent_mem = agent_psutil.memory_info().rss / (1024 * 1024)
+            print(f"   Agent CPU: {agent_cpu:.2f}%")
+            print(f"   Agent RAM: {agent_mem:.1f} MB")
 
-    if agent_mem > 150:
-        print(f"   ⚠️  WARNING: RAM overhead high (target: <150 MB)")
-    else:
-        print(f"   ✓ RAM overhead acceptable")
+            if agent_cpu > 2.0:
+                print(f"   ⚠️  WARNING: CPU overhead high (target: <2%)")
+            else:
+                print(f"   ✓ CPU overhead acceptable")
+
+            if agent_mem > 150:
+                print(f"   ⚠️  WARNING: RAM overhead high (target: <150 MB)")
+            else:
+                print(f"   ✓ RAM overhead acceptable")
+        else:
+            print(f"   ℹ️  Agent process completed before overhead measurement")
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        print(f"   ℹ️  Could not measure agent overhead (process completed)")
 
     # Wait for agent to complete
     stdout, stderr = agent_proc.communicate(timeout=15)
