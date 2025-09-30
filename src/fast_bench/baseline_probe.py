@@ -169,7 +169,9 @@ class BaselineProbe:
         net_io_start = psutil.net_io_counters()
 
         try:
-            with open(test_file, 'rb') as f:
+            # Convert Path to string to handle Windows paths properly
+            file_path_str = str(test_file)
+            with open(file_path_str, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
