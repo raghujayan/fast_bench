@@ -100,6 +100,32 @@ python -m fast_bench.analyze_runs
 iscc .\packaging\installer.iss
 ```
 
+## Development Environment
+
+### Mac → Windows Workflow
+- **Develop on Mac:** Write code, run unit tests with mocks
+- **Test on Windows VM:** Run integration tests with real Windows APIs
+- **Windows Test VM:** 10.50.1.50 (username: qa)
+- **SSH Key:** `~/.ssh/key.pem`
+- **SSH Command:** `ssh -i ~/.ssh/key.pem qa@10.50.1.50`
+
+### Platform-Specific Testing
+- Mark Windows-only tests with `@pytest.mark.skipif(sys.platform != "win32")`
+- Mock pywinauto, pynvml, win32api on Mac
+- Run full integration suite only on Windows VM
+
+### Sync to Windows
+```bash
+# On Mac - commit and push
+git add . && git commit -m "message" && git push
+
+# On Windows VM - pull and test
+ssh -i ~/.ssh/key.pem qa@10.50.1.50
+cd C:\path\to\fast_bench
+git pull
+python -m pytest tests/
+```
+
 ## Important Notes
 
 - This is a Windows-only tool (Windows 10/11 x64)
