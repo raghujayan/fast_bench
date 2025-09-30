@@ -180,12 +180,11 @@ class BaselineProbe:
             print(f"    ⚠️  Cannot get network stats: {e}")
             net_io_start = None
 
-        # Try opening the file - use raw string to avoid path issues
         print(f"    Opening file: {test_file}")
 
         try:
-            # Use Path.open() which handles Windows paths better
-            with test_file.open('rb', buffering=8388608) as f:
+            # Use standard open() with Path object (same as Phase 4 original)
+            with open(test_file, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
