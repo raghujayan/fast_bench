@@ -25,12 +25,12 @@ The baseline probe now includes **Path Capacity Tests** to measure the maximum a
 - **Why it matters**: Shows realistic upper bound for FAST performance
 - **Expected result**: Should saturate available bandwidth (60-90% link utilization)
 
-### 4. **iperf3 Bandwidth** (NEW - Path Capacity)
-- **What it is**: Standard network bandwidth testing using iperf3 protocol
-- **How we measure**: iperf3 client to Azure-region server (10 seconds)
-- **What it tells you**: Raw TCP throughput capacity without HTTP overhead
-- **Why it matters**: Pure bandwidth measurement, independent of Azure Blob API
-- **Note**: Requires iperf3 server running in Azure region
+### 4. **azcopy Benchmark** (NEW - Path Capacity)
+- **What it is**: Azure's official copy tool in benchmark mode
+- **How we measure**: azcopy bench downloads test data with optimized parallelism (15 seconds)
+- **What it tells you**: Maximum Azure Blob throughput using Microsoft's optimized client
+- **Why it matters**: Shows best-case Azure performance with official tooling
+- **Note**: Requires azcopy installed (likely already available in Azure environments)
 
 ## Comparison Table
 
@@ -39,7 +39,7 @@ The baseline probe now includes **Path Capacity Tests** to measure the maximum a
 | **NIC Speed** | 4294 Mbps | Hardware | 100% (theoretical) | Local link capacity |
 | **Single Azure** | 45 MB/s (383 Mbps) | Latency | 9% | Baseline comparison |
 | **Multi Azure** | ~250-400 MB/s | Bandwidth | 60-90% | FAST SDK ceiling |
-| **iperf3** | ~300-500 MB/s | Bandwidth | 70-95% | Pure bandwidth |
+| **azcopy bench** | ~300-500 MB/s | Bandwidth | 70-95% | Microsoft optimized |
 | **FAST (actual)** | 428 MB/s (2981 Mbps) | Bandwidth | 69% | Production perf |
 
 ## Example Output
@@ -51,12 +51,16 @@ Path Capacity Tests (VM ↔ Azure)
 These tests measure maximum achievable bandwidth on the VM-to-Azure path.
 
   Testing Azure Blob throughput - multi-threaded (8 parallel connections)
+    ... 3s: 280.5 MB/s (112 chunks)
+    ... 6s: 295.3 MB/s (224 chunks)
     ✓ Throughput: 312.5 MB/s (2500 Mbps, 58% link utilization)
     ✓ Chunk times: p95=245.3ms p99=312.1ms
 
-  Testing iperf3 bandwidth to blob.core.windows.net
-    Running: iperf3 -c blob.core.windows.net -t 10
-    ✓ Bandwidth: 387.5 MB/s (3100 Mbps, 72% link utilization)
+  Note: azcopy benchmark uploads/downloads test data to measure max throughput
+    Testing azcopy benchmark to Azure Blob
+    Running: azcopy bench (download 30 x 64MB files)
+    ✓ Throughput: 387.5 MB/s (3100 Mbps, 72% link utilization)
+    ✓ Transferred: 28/30 files (1792.0 MB)
 ```
 
 ## Interpreting Results
@@ -64,7 +68,7 @@ These tests measure maximum achievable bandwidth on the VM-to-Azure path.
 ### Scenario 1: High Link Utilization (>60%)
 ```
 Multi Azure: 350 MB/s (2800 Mbps, 65% link utilization)
-iperf3: 400 MB/s (3200 Mbps, 75% link utilization)
+azcopy bench: 400 MB/s (3200 Mbps, 75% link utilization)
 ```
 **Interpretation**: Path is **bandwidth-limited**. You're approaching the ceiling of VM↔Azure bandwidth.
 **FAST Expectation**: 300-400 MB/s is realistic maximum
@@ -89,21 +93,21 @@ Multi Azure: 320 MB/s (62% util)
 1. **Use NIC Speed** to understand local hardware limits
 2. **Use Single-threaded Azure** to establish baseline and measure latency impact
 3. **Use Multi-threaded Azure** to predict FAST SDK ceiling (most relevant for A/B testing)
-4. **Use iperf3** to diagnose network issues (requires server setup)
+4. **Use azcopy benchmark** to verify maximum Azure performance with official tooling
 
 ## Setup Notes
 
 ### Multi-threaded Azure Test
 - **No setup required** - uses your existing SAS URLs
 - **Automatic** - runs after single-threaded test
-- **Time**: ~10 seconds
+- **Time**: ~15 seconds
 
-### iperf3 Test
-- **Requires**: `iperf3` installed on VM (`choco install iperf3` on Windows)
-- **Requires**: iperf3 server in Azure region (or skips gracefully)
-- **Setup**: Deploy Azure VM in same region, run `iperf3 -s`
-- **Optional**: Will show "iperf3 not found, skipping" if unavailable
-- **Time**: ~10 seconds
+### azcopy Benchmark Test
+- **Requires**: `azcopy` installed on VM (often pre-installed in Azure environments)
+- **Windows**: Download from https://aka.ms/downloadazcopy or use `winget install azcopy`
+- **SAS URL**: Uses your configured SAS URL (needs container-level permissions)
+- **Optional**: Will show "azcopy not found, skipping" if unavailable
+- **Time**: ~15-30 seconds (downloads 30 x 64MB test files)
 
 ## Technical Details
 
@@ -113,13 +117,19 @@ Multi Azure: 320 MB/s (62% util)
 ThreadPoolExecutor(max_workers=8)
 # Measures actual network I/O via psutil.net_io_counters()
 # Calculates throughput and link utilization
+# Shows progress updates every 3 seconds
 ```
 
-### iperf3 Implementation
+### azcopy Benchmark Implementation
 ```bash
-# JSON output for parsing
-iperf3 -c <azure_host> -t 10 -J
-# Extracts bits_per_second, retransmits, bytes sent
+# Benchmark mode with optimized parallelism
+azcopy bench <container_sas_url> \
+  --mode download \
+  --size-per-file 64M \
+  --num-of-files 30 \
+  --delete-test-data
+# Parses throughput from azcopy output
+# Measures network I/O via psutil for link utilization
 ```
 
 ## FAQ
@@ -127,11 +137,11 @@ iperf3 -c <azure_host> -t 10 -J
 **Q: Why is multi-threaded faster than single-threaded?**
 A: Single connection is limited by latency (RTT). Multiple connections overlap requests, hiding latency.
 
-**Q: Should iperf3 match multi-threaded Azure?**
-A: Close, but iperf3 may be slightly higher (no HTTP overhead, pure TCP).
+**Q: Should azcopy benchmark match multi-threaded Azure?**
+A: azcopy may be 10-20% higher due to optimizations in Microsoft's tool. Both are good upper bounds.
 
 **Q: What if FAST is slower than multi-threaded Azure test?**
 A: Check FAST SDK configuration - may need more parallel connections or tuning.
 
-**Q: Do I need iperf3?**
-A: No, it's optional. Multi-threaded Azure test is sufficient for FAST ceiling prediction.
+**Q: Do I need azcopy?**
+A: No, it's optional. Multi-threaded Azure test is sufficient for FAST ceiling prediction. azcopy provides validation.

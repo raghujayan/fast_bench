@@ -509,91 +509,149 @@ class BaselineProbe:
             print(f"    ❌ Error: {e}")
             return {'success': False, 'error': str(e)}
 
-    def test_iperf3_bandwidth(self, server_host: str, duration_sec: int = 10) -> Dict[str, Any]:
+    def test_azcopy_benchmark(self, sas_url: str, duration_sec: int = 10) -> Dict[str, Any]:
         """
-        Test network bandwidth using iperf3.
-        Requires iperf3 to be installed on the system and an iperf3 server running on the target host.
+        Test Azure Blob throughput using azcopy benchmark mode.
+        azcopy bench uploads/downloads data to measure maximum throughput with optimized parallelism.
 
         Args:
-            server_host: iperf3 server hostname/IP
-            duration_sec: Duration to test
+            sas_url: SAS URL to an Azure Blob container or file
+            duration_sec: Duration to test (azcopy uses block count instead)
 
         Returns:
-            Dictionary with bandwidth statistics
+            Dictionary with throughput statistics
         """
-        print(f"    Testing iperf3 bandwidth to {server_host}")
+        print(f"    Testing azcopy benchmark to Azure Blob")
 
-        # Check if iperf3 is available
+        # Check if azcopy is available
         try:
-            result = subprocess.run(['iperf3', '--version'], capture_output=True, timeout=5)
+            result = subprocess.run(['azcopy', '--version'], capture_output=True, timeout=5)
             if result.returncode != 0:
-                print(f"    ⚠️  iperf3 not found, skipping")
-                return {'success': False, 'error': 'iperf3 not installed'}
+                print(f"    ⚠️  azcopy not found, skipping")
+                return {'success': False, 'error': 'azcopy not installed'}
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            print(f"    ⚠️  iperf3 not found, skipping")
-            return {'success': False, 'error': 'iperf3 not installed'}
+            print(f"    ⚠️  azcopy not found, skipping")
+            return {'success': False, 'error': 'azcopy not installed'}
 
-        # Run iperf3 client
-        cmd = ['iperf3', '-c', server_host, '-t', str(duration_sec), '-J']  # -J for JSON output
+        # azcopy bench mode: downloads random data to measure throughput
+        # --size-per-file: size of each file (default 256MB)
+        # --num-files: number of files to transfer (we'll use duration to estimate)
+        # Mode: download from blob to null (doesn't write to disk)
+
+        # Estimate number of 64MB files to download for desired duration
+        # Assuming ~200 MB/s, we need ~3 files per second
+        num_files = max(5, duration_sec * 3)
+        file_size_mb = 64
+
+        # Get initial network stats
+        net_io_start = psutil.net_io_counters()
+
+        # Run azcopy bench in download mode
+        cmd = [
+            'azcopy', 'bench',
+            sas_url,
+            '--mode', 'download',
+            '--size-per-file', f'{file_size_mb}M',
+            '--num-of-files', str(num_files),
+            '--delete-test-data'  # Clean up after test
+        ]
 
         try:
-            print(f"    Running: iperf3 -c {server_host} -t {duration_sec}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_sec + 10)
+            print(f"    Running: azcopy bench (download {num_files} x {file_size_mb}MB files)")
+            start_time = time.time()
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=max(60, duration_sec * 3))
+            elapsed = time.time() - start_time
+
+            # Get final network stats
+            net_io_end = psutil.net_io_counters()
+            net_bytes_recv = net_io_end.bytes_recv - net_io_start.bytes_recv
+            net_bandwidth_mbs = (net_bytes_recv / (1024 * 1024)) / elapsed
+            net_bandwidth_mbps = net_bandwidth_mbs * 8
 
             if result.returncode != 0:
                 stderr = result.stderr.strip()
-                # Common error when no server available
-                if 'unable to connect' in stderr.lower() or 'connection refused' in stderr.lower():
-                    print(f"    ⚠️  No iperf3 server available at {server_host}, skipping")
+                if 'not found' in stderr.lower() or 'command not found' in stderr.lower():
+                    print(f"    ⚠️  azcopy not available, skipping")
                 else:
-                    print(f"    ⚠️  iperf3 failed, skipping")
-                return {'success': False, 'error': 'No iperf3 server available'}
+                    print(f"    ⚠️  azcopy benchmark failed, skipping")
+                return {'success': False, 'error': 'azcopy benchmark failed'}
 
-            # Parse JSON output
-            output = json.loads(result.stdout)
+            # Parse azcopy output for throughput
+            # Look for "Final Job Status:" and throughput lines
+            output = result.stdout
+            throughput_mbs = 0
+            bytes_transferred = 0
+            files_transferred = 0
 
-            # Extract bandwidth statistics
-            end_stats = output.get('end', {})
-            sum_sent = end_stats.get('sum_sent', {})
+            for line in output.split('\n'):
+                # azcopy shows throughput like "Throughput (MB/s): 123.45"
+                if 'throughput' in line.lower() and 'mb/s' in line.lower():
+                    try:
+                        # Extract number from line like "Throughput (MB/s): 123.45"
+                        parts = line.split(':')
+                        if len(parts) > 1:
+                            throughput_mbs = float(parts[-1].strip().split()[0])
+                    except:
+                        pass
 
-            bits_per_sec = sum_sent.get('bits_per_second', 0)
-            bandwidth_mbps = bits_per_sec / (1000 * 1000)  # Convert to Mbps
-            bandwidth_mbs = bandwidth_mbps / 8  # Convert to MB/s
+                # Extract bytes transferred
+                if 'bytes transferred' in line.lower() or 'total bytes transferred' in line.lower():
+                    try:
+                        # Look for number in format like "12345678 bytes" or "123.45 MB"
+                        import re
+                        numbers = re.findall(r'[\d.]+', line)
+                        if numbers:
+                            bytes_transferred = int(float(numbers[0]) * (1024 * 1024 if 'mb' in line.lower() else 1))
+                    except:
+                        pass
+
+                # Count successful transfers
+                if 'completed' in line.lower() or 'succeeded' in line.lower():
+                    try:
+                        import re
+                        numbers = re.findall(r'\d+', line)
+                        if numbers:
+                            files_transferred = int(numbers[0])
+                    except:
+                        pass
+
+            # If we couldn't parse azcopy output, calculate from network stats
+            if throughput_mbs == 0:
+                throughput_mbs = net_bandwidth_mbs
 
             # Calculate link utilization
             link_utilization_pct = 0
             if self.link_speed_mbps and self.link_speed_mbps > 0:
-                link_utilization_pct = (bandwidth_mbps / self.link_speed_mbps) * 100
+                link_utilization_pct = (net_bandwidth_mbps / self.link_speed_mbps) * 100
 
             stats = {
                 'success': True,
-                'server_host': server_host,
-                'duration_sec': duration_sec,
-                'bandwidth_mbps': bandwidth_mbps,
-                'bandwidth_mbs': bandwidth_mbs,
+                'duration_sec': elapsed,
+                'throughput_mbs': throughput_mbs,
+                'network_bandwidth_mbs': net_bandwidth_mbs,
+                'network_bandwidth_mbps': net_bandwidth_mbps,
                 'link_utilization_pct': link_utilization_pct,
-                'bytes_sent': sum_sent.get('bytes', 0),
-                'retransmits': sum_sent.get('retransmits', 0),
+                'bytes_transferred': bytes_transferred if bytes_transferred > 0 else net_bytes_recv,
+                'files_transferred': files_transferred,
+                'num_files_requested': num_files,
+                'file_size_mb': file_size_mb
             }
 
             if link_utilization_pct > 0:
-                print(f"    ✓ Bandwidth: {bandwidth_mbs:.1f} MB/s ({bandwidth_mbps:.0f} Mbps, {link_utilization_pct:.0f}% link utilization)")
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps, {link_utilization_pct:.0f}% link utilization)")
             else:
-                print(f"    ✓ Bandwidth: {bandwidth_mbs:.1f} MB/s ({bandwidth_mbps:.0f} Mbps)")
+                print(f"    ✓ Throughput: {throughput_mbs:.1f} MB/s ({net_bandwidth_mbps:.0f} Mbps)")
 
-            if stats['retransmits'] > 0:
-                print(f"    ⚠️  Retransmits: {stats['retransmits']}")
+            if files_transferred > 0:
+                print(f"    ✓ Transferred: {files_transferred}/{num_files} files ({bytes_transferred / (1024**2):.1f} MB)")
 
             return stats
 
         except subprocess.TimeoutExpired:
-            print(f"    ⚠️  iperf3 timeout, skipping")
+            print(f"    ⚠️  azcopy benchmark timeout, skipping")
             return {'success': False, 'error': 'timeout'}
-        except json.JSONDecodeError as e:
-            print(f"    ⚠️  Failed to parse iperf3 output, skipping")
-            return {'success': False, 'error': f'JSON parse error: {e}'}
         except Exception as e:
-            print(f"    ⚠️  iperf3 error, skipping")
+            print(f"    ⚠️  azcopy benchmark error, skipping")
             return {'success': False, 'error': str(e)}
 
     def run(self) -> Dict[str, Any]:
@@ -675,16 +733,28 @@ class BaselineProbe:
         else:
             capacity_results['azure_parallel'] = {'success': False, 'error': 'No SAS URLs'}
 
-        # iperf3 test (if available and configured)
-        # Note: Requires iperf3 server - typically not available for Azure Blob Storage endpoints
-        # This test is optional and will skip gracefully if no server is available
-        if self.config.benchmark.azure_ping_hosts:
-            iperf_host = self.config.benchmark.azure_ping_hosts[0]
-            print(f"\n  Note: iperf3 test requires an iperf3 server at {iperf_host}")
-            print(f"  This is optional and will skip if unavailable.")
-            capacity_results['iperf3'] = self.test_iperf3_bandwidth(iperf_host)
+        # azcopy benchmark test (if SAS URL available)
+        # azcopy bench mode measures maximum Azure throughput with optimized parallelism
+        if self.config.data_sources.azure_blob.sas_download_urls:
+            # Use first SAS URL for benchmark
+            # Note: azcopy bench needs a container URL, not a file URL
+            sas_url = self.config.data_sources.azure_blob.sas_download_urls[0]
+
+            # Extract container URL from file URL if needed
+            # Convert https://account.blob.core.windows.net/container/file.vds?sas
+            # To https://account.blob.core.windows.net/container?sas
+            if '/' in sas_url.split('?')[0].split('/')[-1] and '.' in sas_url.split('?')[0].split('/')[-1]:
+                # Has filename, extract container URL
+                parts = sas_url.split('?')
+                base_url = '/'.join(parts[0].split('/')[:-1])  # Remove filename
+                container_url = f"{base_url}?{parts[1]}" if len(parts) > 1 else base_url
+            else:
+                container_url = sas_url
+
+            print(f"\n  Note: azcopy benchmark uploads/downloads test data to measure max throughput")
+            capacity_results['azcopy_bench'] = self.test_azcopy_benchmark(container_url)
         else:
-            capacity_results['iperf3'] = {'success': False, 'error': 'No Azure host configured'}
+            capacity_results['azcopy_bench'] = {'success': False, 'error': 'No SAS URLs configured'}
 
         self.results['capacity'] = capacity_results
 
@@ -758,11 +828,11 @@ class BaselineProbe:
                 if capacity.get('azure_parallel', {}).get('success'):
                     ap = capacity['azure_parallel']
                     f.write(f"Azure Multi-threaded ({ap['workers']} workers): {ap['throughput_mbs']:.1f} MB/s ({ap['network_bandwidth_mbps']:.0f} Mbps, {ap['link_utilization_pct']:.0f}% link util)\n")
-                if capacity.get('iperf3', {}).get('success'):
-                    ip = capacity['iperf3']
-                    f.write(f"iperf3 to {ip['server_host']}: {ip['bandwidth_mbs']:.1f} MB/s ({ip['bandwidth_mbps']:.0f} Mbps, {ip['link_utilization_pct']:.0f}% link util)\n")
-                    if ip['retransmits'] > 0:
-                        f.write(f"  Retransmits: {ip['retransmits']}\n")
+                if capacity.get('azcopy_bench', {}).get('success'):
+                    az = capacity['azcopy_bench']
+                    f.write(f"azcopy benchmark: {az['throughput_mbs']:.1f} MB/s ({az['network_bandwidth_mbps']:.0f} Mbps, {az['link_utilization_pct']:.0f}% link util)\n")
+                    if az.get('files_transferred', 0) > 0:
+                        f.write(f"  Files: {az['files_transferred']}/{az['num_files_requested']} transferred\n")
                 f.write("\n")
 
         print(f"✓ Saved: {summary_path}")

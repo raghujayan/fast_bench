@@ -289,48 +289,50 @@ def test_azure_throughput_parallel_success(mock_config, mocker):
     assert result['chunk_count'] > 0
 
 
-def test_iperf3_not_installed(mock_config, mocker):
-    """Test iperf3 bandwidth when iperf3 is not installed."""
+def test_azcopy_not_installed(mock_config, mocker):
+    """Test azcopy benchmark when azcopy is not installed."""
     probe = BaselineProbe(mock_config)
     probe.link_speed_mbps = 1000
 
-    # Mock iperf3 not found
+    # Mock azcopy not found
     mocker.patch('subprocess.run', side_effect=FileNotFoundError())
 
-    result = probe.test_iperf3_bandwidth('example.com')
+    result = probe.test_azcopy_benchmark('https://example.blob.core.windows.net/container?sas=token')
 
     assert result['success'] is False
     assert 'not installed' in result['error']
 
 
 @pytest.mark.mock
-def test_iperf3_success(mock_config, mocker):
-    """Test iperf3 bandwidth with mocked subprocess."""
+def test_azcopy_success(mock_config, mocker):
+    """Test azcopy benchmark with mocked subprocess."""
     probe = BaselineProbe(mock_config)
     probe.link_speed_mbps = 1000
 
-    # Mock iperf3 version check
+    # Mock azcopy version check
     mock_version = mocker.Mock(returncode=0)
 
-    # Mock iperf3 JSON output
-    iperf_output = {
-        'end': {
-            'sum_sent': {
-                'bits_per_second': 500000000,  # 500 Mbps
-                'bytes': 62500000,  # 62.5 MB
-                'retransmits': 5
-            }
-        }
-    }
-    mock_iperf = mocker.Mock(returncode=0, stdout=json.dumps(iperf_output))
+    # Mock azcopy bench output
+    azcopy_output = """
+Job ... Started
+Throughput (MB/s): 450.25
+Total bytes transferred: 524288000
+Files Completed: 8 of 10
+Job ... completed
+"""
+    mock_bench = mocker.Mock(returncode=0, stdout=azcopy_output, stderr='')
 
-    mocker.patch('subprocess.run', side_effect=[mock_version, mock_iperf])
+    # Mock network counters
+    mock_net_start = mocker.Mock(bytes_recv=0)
+    mock_net_end = mocker.Mock(bytes_recv=500 * 1024 * 1024)  # 500 MB
+    mocker.patch('psutil.net_io_counters', side_effect=[mock_net_start, mock_net_end])
 
-    result = probe.test_iperf3_bandwidth('example.com', duration_sec=10)
+    mocker.patch('subprocess.run', side_effect=[mock_version, mock_bench])
+
+    result = probe.test_azcopy_benchmark('https://example.blob.core.windows.net/container?sas=token', duration_sec=10)
 
     assert result['success'] is True
-    assert result['bandwidth_mbps'] == 500.0
-    assert result['bandwidth_mbs'] == 62.5
-    assert result['link_utilization_pct'] == 50.0  # 500 Mbps / 1000 Mbps
-    assert result['retransmits'] == 5
-    assert result['server_host'] == 'example.com'
+    assert result['throughput_mbs'] > 0
+    assert result['network_bandwidth_mbps'] > 0
+    assert result['link_utilization_pct'] >= 0
+    assert result['files_transferred'] == 8
