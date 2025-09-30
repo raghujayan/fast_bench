@@ -63,16 +63,31 @@ def attach_petrel(
 
     # Try to find existing Petrel window (main window, not File Explorer)
     try:
-        # Find main Petrel window, excluding "File Explorer" windows
-        app = Application(backend="uia").connect(title_re=".*Petrel.*", timeout=5)
-        # Look for the main Petrel window (has project name in brackets or "Platform")
+        from pywinauto.findwindows import ElementAmbiguousError
+        # Try to connect - may raise ElementAmbiguousError if multiple windows
+        try:
+            app = Application(backend="uia").connect(title_re=".*Petrel.*", timeout=5)
+        except ElementAmbiguousError:
+            # Multiple windows found - use Desktop to filter manually
+            print("Multiple Petrel windows found, filtering...")
+            desktop = Desktop(backend="uia")
+            for window in desktop.windows():
+                title = window.window_text()
+                if "Petrel" in title and "File Explorer" not in title and title:
+                    print(f"✓ Attached to existing Petrel window: {title}")
+                    return window
+            # If we get here, no suitable window found
+            raise Exception("No main Petrel window found")
+
+        # Single window found or connection succeeded
         for window in app.windows():
             title = window.window_text()
             if "Petrel" in title and "File Explorer" not in title:
                 print(f"✓ Attached to existing Petrel window: {title}")
                 return window
     except Exception as e:
-        pass  # Not running, will launch if requested
+        print(f"Note: Could not attach to existing Petrel window ({type(e).__name__})")
+        # Not running or couldn't attach, will launch if requested
 
     # Launch Petrel if not found and launch_if_not_found is True
     if launch_if_not_found:
