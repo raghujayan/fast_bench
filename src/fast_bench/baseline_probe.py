@@ -180,17 +180,21 @@ class BaselineProbe:
             print(f"    ⚠️  Cannot get network stats: {e}")
             net_io_start = None
 
-        try:
-            # Convert Path to string and normalize for Windows
-            # This handles paths with spaces and special characters properly
-            if sys.platform == "win32":
-                # Use raw string path for Windows
-                file_path_str = str(test_file).replace('/', '\\')
-            else:
-                file_path_str = str(test_file)
+        # Try opening the file with explicit binary mode and larger buffer
+        path_str = str(test_file)
+        print(f"    Opening file: {path_str}")
 
-            print(f"    Opening file: {file_path_str}")
-            with open(file_path_str, 'rb') as f:
+        try:
+            # Use os.open with explicit flags for better Windows compatibility
+            import os as os_module
+            if sys.platform == "win32":
+                # Open with explicit binary and no special handling
+                fd = os_module.open(path_str, os_module.O_RDONLY | os_module.O_BINARY)
+                f = os_module.fdopen(fd, 'rb', buffering=8388608)  # 8MB buffer
+            else:
+                f = open(path_str, 'rb', buffering=8388608)
+
+            with f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
