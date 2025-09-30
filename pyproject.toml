@@ -1,0 +1,61 @@
+[project]
+name = "fast_bench"
+version = "0.1.0"
+description = "FAST vs NAS vs Azure VDS A/B Benchmark Harness for Petrel"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Bluware", email = "noreply@bluware.com"}
+]
+keywords = ["petrel", "benchmark", "seismic", "vds", "azure"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "psutil>=5.9.0",
+    "pywinauto==0.6.8; sys_platform=='win32'",
+    "pynput>=1.7.6; sys_platform=='win32'",
+    "pyautogui>=0.9.53; sys_platform=='win32'",
+    "pydantic>=2.0.0",
+    "pynvml>=11.5.0; sys_platform=='win32'",
+    "requests>=2.31.0",
+    "pyyaml>=6.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-mock>=3.11.0",
+    "responses>=0.23.0",
+]
+
+[project.scripts]
+fast-bench-baseline = "fast_bench.baseline_probe:main"
+fast-bench-run = "fast_bench.run_bench:main"
+fast-bench-analyze = "fast_bench.analyze_runs:main"
+fast-bench-recorder = "fast_bench.recorder_mouse:main"
+fast-bench-replayer = "fast_bench.replayer_mouse:main"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+markers = [
+    "integration: marks tests as integration tests requiring real NAS/Azure (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

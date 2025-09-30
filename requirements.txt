@@ -1,0 +1,19 @@
+# Core dependencies (cross-platform)
+psutil==5.9.8
+pydantic==2.9.2
+requests==2.32.3
+pyyaml==6.0.2
+pandas==2.2.3
+matplotlib==3.9.2
+
+# Windows-specific dependencies
+# Uncomment on Windows:
+# pywinauto==0.6.8
+# pynput==1.7.7
+# pyautogui==0.9.54
+# pynvml==11.5.3
+
+# Development dependencies
+pytest==8.3.3
+pytest-mock==3.14.0
+responses==0.25.3

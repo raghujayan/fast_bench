@@ -1,0 +1,53 @@
+petrel:
+  exe_path: "C:\\Program Files\\Schlumberger\\Petrel 2024\\Petrel.exe"
+  project_arg_supported: true
+
+paths:
+  # Local Petrel projects (identical project, only data source differs):
+  project_shared_zgy_local: "D:\\PetrelProjects\\FieldA_SharedZGY.Petrel"
+  project_fast_vzgy_local: "D:\\PetrelProjects\\FieldA_FastVirtualZGY.Petrel"
+
+data_sources:
+  # Used only for verification and labeling, not for opening directly in Petrel:
+  shared_zgy_hint: "\\\\NAS01\\SEISMIC\\FIELDA\\field.zgy"
+  fast_vzgy_hint: "\\\\FASTVZGY\\FIELDA\\field.zgy"
+  # Azure Blob storage that holds the canonical VDS for FAST to stream:
+  azure_blob:
+    account: "myaccount"                   # informational; not used if SAS URLs provided
+    container: "vds-container"             # informational
+    # Optional listing URL patterns (for baseline sanity probes):
+    example_vds_prefix: "https://myaccount.blob.core.windows.net/vds-container/FieldA/"
+    # Provide presigned SAS URLs for baseline download/upload probes:
+    sas_download_urls:
+      - "https://myaccount.blob.core.windows.net/vds-container/FieldA/bigfile1.bin?sv=2023-01-01&se=2025-12-31&sr=b&sp=r&sig=EXAMPLE_SAS_TOKEN_1"
+      - "https://myaccount.blob.core.windows.net/vds-container/FieldA/bigfile2.bin?sv=2023-01-01&se=2025-12-31&sr=b&sp=r&sig=EXAMPLE_SAS_TOKEN_2"
+    sas_upload_urls: []                    # optional PUT SAS for uplink measurement
+
+hotkeys:
+  scrub_next_inline: "PGDN"
+  attribute_compute: "%1"     # Alt+1 Petrel macro
+  horizon_autotrack: "%2"     # Alt+2 Petrel macro
+  export_slice: "%3"          # Alt+3 Petrel macro
+
+fast:
+  logs:
+    - "C:\\ProgramData\\Bluware\\FAST\\logs\\fast_trace.log"
+  cache_dir: "C:\\FASTCache"
+
+defaults:
+  scrub_count: 100
+  scrub_delay_sec: 0.04
+  horizon_run_seconds: 45
+
+out_dir: "C:\\BenchRuns\\fast_metrics_runs"
+
+benchmark:
+  # NAS probes:
+  nas_test_dir: "\\\\NAS01\\SEISMIC\\BENCH"
+  nas_ping_host: "nas01.company.lan"
+  # Azure probes:
+  azure_ping_hosts:
+    - "blob.core.windows.net"            # RTT floor to Azure edge
+    - "myaccount.blob.core.windows.net"  # account endpoint (optional)
+  parallel_streams: 4
+  http_chunk_bytes: 8388608              # 8 MiB ranged GET chunks
