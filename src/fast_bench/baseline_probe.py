@@ -180,11 +180,19 @@ class BaselineProbe:
             print(f"    ⚠️  Cannot get network stats: {e}")
             net_io_start = None
 
-        print(f"    Opening file: {test_file}")
+        # Debug: Show path details
+        print(f"    Path type: {type(test_file)}")
+        print(f"    Path string: {str(test_file)}")
+        print(f"    Path repr: {repr(test_file)}")
+        print(f"    Path absolute: {test_file.absolute()}")
 
+        # Try multiple approaches
         try:
-            # Use standard open() with Path object (same as Phase 4 original)
-            with open(test_file, 'rb') as f:
+            print(f"    Attempting to open file...")
+            # Try with string conversion first
+            path_str = str(test_file)
+            print(f"    Using path string: {path_str!r}")
+            with open(path_str, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
