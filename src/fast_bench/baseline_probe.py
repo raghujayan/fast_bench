@@ -181,38 +181,28 @@ class BaselineProbe:
             net_io_start = None
 
         try:
-            # Windows network drives with spaces need special handling
-            # The issue: Python's open() struggles with paths like "K:\AZURE STORAGE\..."
-            # Solution: Read in smaller operations or use memory mapping
+            # Use regular buffered I/O for best sequential read performance
+            # Default buffering (8KB-128KB) is optimal for network reads
             import os
-            import mmap
 
             file_str = str(test_file)
             print(f"    Opening file: {file_str}")
 
-            # Try opening with memory mapping - works better with network drives
-            with open(file_str, 'rb', buffering=0) as f:
-                # Use memory mapping for better network drive compatibility
-                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mmapped_file:
-                    offset = 0
-                    file_size = len(mmapped_file)
+            # Use default buffering for optimal network performance
+            # The io.DEFAULT_BUFFER_SIZE (usually 8KB) works well for SMB shares
+            with open(file_str, 'rb') as f:
+                while time.time() - start_time < duration_sec:
+                    chunk_start = time.time()
+                    data = f.read(chunk_size)
+                    chunk_elapsed = time.time() - chunk_start
 
-                    while time.time() - start_time < duration_sec:
-                        chunk_start = time.time()
+                    if not data:
+                        # Reached EOF, seek back to start
+                        f.seek(0)
+                        continue
 
-                        # Read from memory-mapped file
-                        end_offset = min(offset + chunk_size, file_size)
-                        data = mmapped_file[offset:end_offset]
-                        chunk_elapsed = time.time() - chunk_start
-
-                        if not data or end_offset >= file_size:
-                            # Reached EOF, seek back to start
-                            offset = 0
-                            continue
-
-                        bytes_read += len(data)
-                        chunk_times.append(chunk_elapsed)
-                        offset = end_offset
+                    bytes_read += len(data)
+                    chunk_times.append(chunk_elapsed)
 
             elapsed = time.time() - start_time
             throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
