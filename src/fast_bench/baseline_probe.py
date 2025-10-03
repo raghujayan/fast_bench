@@ -200,15 +200,21 @@ class BaselineProbe:
                 FILE_ATTRIBUTE_NORMAL = 0x80
                 INVALID_HANDLE_VALUE = -1
 
-                # Setup Windows API functions
-                CreateFileW = ctypes.windll.kernel32.CreateFileW
+                # Setup Windows API functions with proper error handling
+                kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+
+                CreateFileW = kernel32.CreateFileW
                 CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
                                        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
                 CreateFileW.restype = wintypes.HANDLE
 
-                ReadFile = ctypes.windll.kernel32.ReadFile
-                CloseHandle = ctypes.windll.kernel32.CloseHandle
-                SetFilePointer = ctypes.windll.kernel32.SetFilePointer
+                ReadFile = kernel32.ReadFile
+                ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                                    ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+                ReadFile.restype = wintypes.BOOL
+
+                CloseHandle = kernel32.CloseHandle
+                SetFilePointer = kernel32.SetFilePointer
 
                 # Open file using Windows API
                 file_path = str(test_file)
@@ -235,10 +241,9 @@ class BaselineProbe:
 
                         # Debug first read
                         if first_read:
+                            error_code = ctypes.get_last_error()
                             print(f"    First read: success={success}, bytes={bytes_read_chunk.value}, elapsed={chunk_elapsed:.3f}s")
-                            if not success:
-                                error_code = ctypes.get_last_error()
-                                print(f"    Error code: {error_code}")
+                            print(f"    Error code: {error_code}")
                             first_read = False
 
                         if bytes_read_chunk.value == 0:
