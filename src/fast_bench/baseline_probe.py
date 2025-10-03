@@ -187,44 +187,73 @@ class BaselineProbe:
 
             print(f"    Opening file: {test_file}")
 
-            # On Windows, convert to short path (8.3 format) to avoid spaces
+            # On Windows, use direct Win32 API to open and read the file
+            # Python's open() has issues with network paths containing spaces
             if sys.platform == "win32":
                 import ctypes
                 from ctypes import wintypes
 
-                # Get short path name (removes spaces, e.g., "AZURE STORAGE" -> "AZURES~1")
-                GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
-                GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
-                GetShortPathNameW.restype = wintypes.DWORD
+                # Windows API constants
+                GENERIC_READ = 0x80000000
+                FILE_SHARE_READ = 0x00000001
+                OPEN_EXISTING = 3
+                FILE_ATTRIBUTE_NORMAL = 0x80
+                INVALID_HANDLE_VALUE = -1
 
-                long_path = str(test_file)
-                buffer_size = 500
-                short_path_buffer = ctypes.create_unicode_buffer(buffer_size)
-                result = GetShortPathNameW(long_path, short_path_buffer, buffer_size)
+                # Setup Windows API functions
+                CreateFileW = ctypes.windll.kernel32.CreateFileW
+                CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+                CreateFileW.restype = wintypes.HANDLE
 
-                if result > 0:
-                    short_path = short_path_buffer.value
-                    print(f"    Short path: {short_path}")
-                    f = open(short_path, 'rb')
-                else:
-                    print(f"    Could not get short path, using original")
-                    f = open(long_path, 'rb')
+                ReadFile = ctypes.windll.kernel32.ReadFile
+                CloseHandle = ctypes.windll.kernel32.CloseHandle
+                SetFilePointer = ctypes.windll.kernel32.SetFilePointer
+
+                # Open file using Windows API
+                file_path = str(test_file)
+                handle = CreateFileW(file_path, GENERIC_READ, FILE_SHARE_READ,
+                                    None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None)
+
+                if handle == INVALID_HANDLE_VALUE:
+                    raise OSError(f"Cannot open file via Win32 API: {ctypes.get_last_error()}")
+
+                print(f"    Opened via Win32 API (handle: {handle})")
+
+                try:
+                    while time.time() - start_time < duration_sec:
+                        chunk_start = time.time()
+
+                        # Read chunk using Windows API
+                        buffer = ctypes.create_string_buffer(chunk_size)
+                        bytes_read_chunk = wintypes.DWORD()
+                        success = ReadFile(handle, buffer, chunk_size, ctypes.byref(bytes_read_chunk), None)
+
+                        chunk_elapsed = time.time() - chunk_start
+
+                        if not success or bytes_read_chunk.value == 0:
+                            # Reached EOF, seek back to start
+                            SetFilePointer(handle, 0, None, 0)  # FILE_BEGIN = 0
+                            continue
+
+                        bytes_read += bytes_read_chunk.value
+                        chunk_times.append(chunk_elapsed)
+                finally:
+                    CloseHandle(handle)
             else:
-                f = test_file.open('rb')
+                # Non-Windows: use regular file I/O
+                with test_file.open('rb') as f:
+                    while time.time() - start_time < duration_sec:
+                        chunk_start = time.time()
+                        data = f.read(chunk_size)
+                        chunk_elapsed = time.time() - chunk_start
 
-            with f:
-                while time.time() - start_time < duration_sec:
-                    chunk_start = time.time()
-                    data = f.read(chunk_size)
-                    chunk_elapsed = time.time() - chunk_start
+                        if not data:
+                            f.seek(0)
+                            continue
 
-                    if not data:
-                        # Reached EOF, seek back to start
-                        f.seek(0)
-                        continue
-
-                    bytes_read += len(data)
-                    chunk_times.append(chunk_elapsed)
+                        bytes_read += len(data)
+                        chunk_times.append(chunk_elapsed)
 
             elapsed = time.time() - start_time
             throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
