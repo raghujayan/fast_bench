@@ -183,11 +183,19 @@ class BaselineProbe:
         try:
             # Use regular buffered I/O for best sequential read performance
             # Default buffering (8KB-128KB) is optimal for network reads
+            import os
+
             print(f"    Opening file: {test_file}")
 
-            # Use Path.open() instead of open() - it uses the same Windows API as stat()
-            # This handles paths with spaces on network drives correctly
-            with test_file.open('rb') as f:
+            # On Windows, use os.open() with O_RDONLY | O_BINARY for raw file descriptor
+            # Then wrap with os.fdopen() - this bypasses Python's path validation issues
+            if sys.platform == "win32":
+                fd = os.open(str(test_file), os.O_RDONLY | os.O_BINARY)
+                f = os.fdopen(fd, 'rb')
+            else:
+                f = test_file.open('rb')
+
+            with f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
