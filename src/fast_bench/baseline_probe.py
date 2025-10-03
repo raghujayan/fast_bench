@@ -181,36 +181,38 @@ class BaselineProbe:
             net_io_start = None
 
         try:
-            # For Windows network paths with spaces, we need to handle them carefully
-            # Convert Path to string and use raw path handling
+            # Windows network drives with spaces need special handling
+            # The issue: Python's open() struggles with paths like "K:\AZURE STORAGE\..."
+            # Solution: Read in smaller operations or use memory mapping
             import os
+            import mmap
 
-            # Use the original string representation without normpath (which can break UNC paths)
             file_str = str(test_file)
             print(f"    Opening file: {file_str}")
 
-            # On Windows, try using extended-length path syntax for paths with spaces
-            if sys.platform == "win32" and " " in file_str:
-                # Use \\?\ prefix for extended-length paths
-                # But only if it's not already a UNC path and not already extended
-                if not file_str.startswith(('\\\\?\\', '\\\\.\\', '\\\\')):
-                    # For mapped drives like K:\, use \\?\K:\...
-                    file_str = '\\\\?\\' + file_str
-                    print(f"    Using extended path: {file_str}")
+            # Try opening with memory mapping - works better with network drives
+            with open(file_str, 'rb', buffering=0) as f:
+                # Use memory mapping for better network drive compatibility
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mmapped_file:
+                    offset = 0
+                    file_size = len(mmapped_file)
 
-            with open(file_str, 'rb') as f:
-                while time.time() - start_time < duration_sec:
-                    chunk_start = time.time()
-                    data = f.read(chunk_size)
-                    chunk_elapsed = time.time() - chunk_start
+                    while time.time() - start_time < duration_sec:
+                        chunk_start = time.time()
 
-                    if not data:
-                        # Reached EOF, seek back to start
-                        f.seek(0)
-                        continue
+                        # Read from memory-mapped file
+                        end_offset = min(offset + chunk_size, file_size)
+                        data = mmapped_file[offset:end_offset]
+                        chunk_elapsed = time.time() - chunk_start
 
-                    bytes_read += len(data)
-                    chunk_times.append(chunk_elapsed)
+                        if not data or end_offset >= file_size:
+                            # Reached EOF, seek back to start
+                            offset = 0
+                            continue
+
+                        bytes_read += len(data)
+                        chunk_times.append(chunk_elapsed)
+                        offset = end_offset
 
             elapsed = time.time() - start_time
             throughput_mbs = (bytes_read / (1024 * 1024)) / elapsed
