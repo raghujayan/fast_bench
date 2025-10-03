@@ -185,7 +185,8 @@ class BaselineProbe:
             # Default buffering (8KB-128KB) is optimal for network reads
             import os
 
-            file_str = str(test_file)
+            # Convert pathlib.Path to string - use os.fspath for proper conversion
+            file_str = os.fspath(test_file)
             print(f"    Opening file: {file_str}")
 
             # Use default buffering for optimal network performance
