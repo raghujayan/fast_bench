@@ -181,13 +181,24 @@ class BaselineProbe:
             net_io_start = None
 
         try:
-            # Don't use resolve() - it causes "volume does not contain recognized file system" error
-            # Just normalize the string representation directly
+            # For Windows network paths with spaces, we need to handle them carefully
+            # Convert Path to string and use raw path handling
             import os
-            normalized_path = os.path.normpath(str(test_file))
-            print(f"    Normalized path: {normalized_path}")
 
-            with open(normalized_path, 'rb') as f:
+            # Use the original string representation without normpath (which can break UNC paths)
+            file_str = str(test_file)
+            print(f"    Opening file: {file_str}")
+
+            # On Windows, try using extended-length path syntax for paths with spaces
+            if sys.platform == "win32" and " " in file_str:
+                # Use \\?\ prefix for extended-length paths
+                # But only if it's not already a UNC path and not already extended
+                if not file_str.startswith(('\\\\?\\', '\\\\.\\', '\\\\')):
+                    # For mapped drives like K:\, use \\?\K:\...
+                    file_str = '\\\\?\\' + file_str
+                    print(f"    Using extended path: {file_str}")
+
+            with open(file_str, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
