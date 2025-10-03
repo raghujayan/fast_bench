@@ -222,6 +222,7 @@ class BaselineProbe:
 
                 try:
                     read_count = 0
+                    first_read = True
                     while time.time() - start_time < duration_sec:
                         chunk_start = time.time()
 
@@ -232,8 +233,19 @@ class BaselineProbe:
 
                         chunk_elapsed = time.time() - chunk_start
 
+                        # Debug first read
+                        if first_read:
+                            print(f"    First read: success={success}, bytes={bytes_read_chunk.value}, elapsed={chunk_elapsed:.3f}s")
+                            if not success:
+                                error_code = ctypes.get_last_error()
+                                print(f"    Error code: {error_code}")
+                            first_read = False
+
                         if bytes_read_chunk.value == 0:
                             # Reached EOF, seek back to start
+                            if read_count == 0:
+                                print(f"    ⚠️  Got 0 bytes on first read - EOF immediately?")
+                                break
                             SetFilePointer(handle, 0, None, 0)  # FILE_BEGIN = 0
                             continue
 
