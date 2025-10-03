@@ -183,15 +183,11 @@ class BaselineProbe:
         try:
             # Use regular buffered I/O for best sequential read performance
             # Default buffering (8KB-128KB) is optimal for network reads
-            import os
+            print(f"    Opening file: {test_file}")
 
-            # Convert pathlib.Path to string - use os.fspath for proper conversion
-            file_str = os.fspath(test_file)
-            print(f"    Opening file: {file_str}")
-
-            # Use default buffering for optimal network performance
-            # The io.DEFAULT_BUFFER_SIZE (usually 8KB) works well for SMB shares
-            with open(file_str, 'rb') as f:
+            # Use Path.open() instead of open() - it uses the same Windows API as stat()
+            # This handles paths with spaces on network drives correctly
+            with test_file.open('rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
