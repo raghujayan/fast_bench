@@ -142,7 +142,7 @@ class BaselineProbe:
         self.results['machine'] = specs
         return specs
 
-    def test_nas_throughput(self, test_file: Path, chunk_size_mb: int = 8, duration_sec: int = 10) -> Dict[str, Any]:
+    def test_nas_throughput(self, test_file: Path, chunk_size_mb: int = 1, duration_sec: int = 10) -> Dict[str, Any]:
         """
         Test NAS read throughput.
 
@@ -243,7 +243,24 @@ class BaselineProbe:
                         if first_read:
                             error_code = ctypes.get_last_error()
                             print(f"    First read: success={success}, bytes={bytes_read_chunk.value}, elapsed={chunk_elapsed:.3f}s")
-                            print(f"    Error code: {error_code}")
+                            if error_code != 0:
+                                # Error 1117 = ERROR_IO_DEVICE (I/O device error)
+                                # Try smaller chunk size for network drives
+                                if error_code == 1117:
+                                    print(f"    Error {error_code}: I/O device error - trying smaller chunk (64KB)")
+                                    # Retry with much smaller chunk
+                                    chunk_size_retry = 64 * 1024  # 64KB
+                                    buffer = ctypes.create_string_buffer(chunk_size_retry)
+                                    bytes_read_chunk = wintypes.DWORD(0)
+                                    success = ReadFile(handle, buffer, chunk_size_retry, ctypes.byref(bytes_read_chunk), None)
+                                    error_code = ctypes.get_last_error()
+                                    print(f"    Retry: success={success}, bytes={bytes_read_chunk.value}, error={error_code}")
+                                    if success and bytes_read_chunk.value > 0:
+                                        # Use smaller chunk size for rest of test
+                                        chunk_size = chunk_size_retry
+                                        print(f"    Switched to {chunk_size // 1024}KB chunks")
+                                else:
+                                    print(f"    Error code: {error_code}")
                             first_read = False
 
                         if bytes_read_chunk.value == 0:
