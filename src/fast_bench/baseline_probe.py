@@ -181,11 +181,10 @@ class BaselineProbe:
             net_io_start = None
 
         try:
-            # Convert to absolute path with proper Windows normalization
-            # The issue: glob() returns paths with forward slashes internally
-            # Fix: Use resolve() and convert to string, then recreate as pure Windows path
+            # Don't use resolve() - it causes "volume does not contain recognized file system" error
+            # Just normalize the string representation directly
             import os
-            normalized_path = os.path.normpath(str(test_file.resolve()))
+            normalized_path = os.path.normpath(str(test_file))
             print(f"    Normalized path: {normalized_path}")
 
             with open(normalized_path, 'rb') as f:
