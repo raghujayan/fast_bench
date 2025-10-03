@@ -180,19 +180,15 @@ class BaselineProbe:
             print(f"    ⚠️  Cannot get network stats: {e}")
             net_io_start = None
 
-        # Debug: Show path details
-        print(f"    Path type: {type(test_file)}")
-        print(f"    Path string: {str(test_file)}")
-        print(f"    Path repr: {repr(test_file)}")
-        print(f"    Path absolute: {test_file.absolute()}")
-
-        # Try multiple approaches
         try:
-            print(f"    Attempting to open file...")
-            # Try with string conversion first
-            path_str = str(test_file)
-            print(f"    Using path string: {path_str!r}")
-            with open(path_str, 'rb') as f:
+            # Convert to absolute path with proper Windows normalization
+            # The issue: glob() returns paths with forward slashes internally
+            # Fix: Use resolve() and convert to string, then recreate as pure Windows path
+            import os
+            normalized_path = os.path.normpath(str(test_file.resolve()))
+            print(f"    Normalized path: {normalized_path}")
+
+            with open(normalized_path, 'rb') as f:
                 while time.time() - start_time < duration_sec:
                     chunk_start = time.time()
                     data = f.read(chunk_size)
