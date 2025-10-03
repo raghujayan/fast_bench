@@ -187,11 +187,28 @@ class BaselineProbe:
 
             print(f"    Opening file: {test_file}")
 
-            # On Windows, use os.open() with O_RDONLY | O_BINARY for raw file descriptor
-            # Then wrap with os.fdopen() - this bypasses Python's path validation issues
+            # On Windows, convert to short path (8.3 format) to avoid spaces
             if sys.platform == "win32":
-                fd = os.open(str(test_file), os.O_RDONLY | os.O_BINARY)
-                f = os.fdopen(fd, 'rb')
+                import ctypes
+                from ctypes import wintypes
+
+                # Get short path name (removes spaces, e.g., "AZURE STORAGE" -> "AZURES~1")
+                GetShortPathNameW = ctypes.windll.kernel32.GetShortPathNameW
+                GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+                GetShortPathNameW.restype = wintypes.DWORD
+
+                long_path = str(test_file)
+                buffer_size = 500
+                short_path_buffer = ctypes.create_unicode_buffer(buffer_size)
+                result = GetShortPathNameW(long_path, short_path_buffer, buffer_size)
+
+                if result > 0:
+                    short_path = short_path_buffer.value
+                    print(f"    Short path: {short_path}")
+                    f = open(short_path, 'rb')
+                else:
+                    print(f"    Could not get short path, using original")
+                    f = open(long_path, 'rb')
             else:
                 f = test_file.open('rb')
 
