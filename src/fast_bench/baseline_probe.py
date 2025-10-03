@@ -221,25 +221,39 @@ class BaselineProbe:
                 print(f"    Opened via Win32 API (handle: {handle})")
 
                 try:
+                    read_count = 0
                     while time.time() - start_time < duration_sec:
                         chunk_start = time.time()
 
                         # Read chunk using Windows API
                         buffer = ctypes.create_string_buffer(chunk_size)
-                        bytes_read_chunk = wintypes.DWORD()
+                        bytes_read_chunk = wintypes.DWORD(0)
                         success = ReadFile(handle, buffer, chunk_size, ctypes.byref(bytes_read_chunk), None)
 
                         chunk_elapsed = time.time() - chunk_start
 
-                        if not success or bytes_read_chunk.value == 0:
+                        if bytes_read_chunk.value == 0:
                             # Reached EOF, seek back to start
                             SetFilePointer(handle, 0, None, 0)  # FILE_BEGIN = 0
                             continue
 
+                        if not success:
+                            error_code = ctypes.get_last_error()
+                            print(f"    ⚠️  ReadFile failed: error {error_code}")
+                            break
+
                         bytes_read += bytes_read_chunk.value
                         chunk_times.append(chunk_elapsed)
+                        read_count += 1
+
+                        # Debug: print progress every 10 reads
+                        if read_count % 10 == 0:
+                            interim_mb = bytes_read / (1024 * 1024)
+                            print(f"    ... Read {read_count} chunks ({interim_mb:.1f} MB so far)")
+
                 finally:
                     CloseHandle(handle)
+                    print(f"    Closed file (total chunks: {read_count})")
             else:
                 # Non-Windows: use regular file I/O
                 with test_file.open('rb') as f:
